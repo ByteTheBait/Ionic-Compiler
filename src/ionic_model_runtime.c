@@ -124,6 +124,14 @@ const char *ionic_get_arg(int64_t n) {
     return ionic_argv[idx];
 }
 
+int64_t ionic_target_is_linux(void) {
+#ifdef __linux__
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 int64_t ionic_cpu_core_count(void) {
 #ifdef _WIN32
     SYSTEM_INFO si; GetSystemInfo(&si);

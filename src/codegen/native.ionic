@@ -169,10 +169,13 @@ fn strtab_init() -> int64 {
     return 0;
 }
 
+mut g_target_linux = 0;   // set by main before codegen; 1 = Linux/ELF, 0 = macOS/Mach-O
+
 fn strtab_add(string name) -> int64 {
     let off = strtab_len;
-    // Prepend underscore (Mach-O C symbol convention)
-    strtab_buf.push(95);   // '_'
+    if (g_target_linux == 0) {
+        strtab_buf.push(95);   // '_' prefix for Mach-O only
+    }
     let n = str_len(name);
     mut i = 0;
     while (i < n) {
@@ -1256,6 +1259,7 @@ fn ncg_call(int64 node) -> int64 {
     if (str_eq(callee, "str_to_int64"))      { real_callee = "ionic_str_to_int64"; }
     if (str_eq(callee, "str_hash"))          { real_callee = "ionic_str_hash"; }
     if (str_eq(callee, "cpu_core_count"))    { real_callee = "ionic_cpu_core_count"; }
+    if (str_eq(callee, "target_is_linux"))   { real_callee = "ionic_target_is_linux"; }
     if (str_eq(callee, "exit"))              { real_callee = "ionic_exit"; }
     if (str_eq(callee, "read_line"))         { real_callee = "ionic_read_line"; }
     if (str_eq(callee, "str_slice"))         { real_callee = "ionic_str_slice"; }
@@ -2058,6 +2062,193 @@ fn write_macho(string out_path) -> int64 {
     return 0;
 }
 
+// ── ELF/Linux ARM64 object file writer ───────────────────────────────────────
+let R_AARCH64_CALL26           = 283;
+let R_AARCH64_ADR_PREL_PG_HI21 = 275;
+let R_AARCH64_ADD_ABS_LO12_NC  = 277;
+let R_AARCH64_LD64_ABS_LO12_NC = 286;
+
+fn elf_align8(int64 x) -> int64 {
+    let r = x % 8;
+    if (r == 0) { return x; }
+    return x + (8 - r);
+}
+
+fn write_elf(string out_path) -> int64 {
+    mut out = [0]; arr_reset(out);
+    buf_align(text_buf, 4);
+    let text_size   = text_buf.len;
+    let rodata_size = data_buf.len;
+    let data_size   = glob_buf.len;
+
+    // Build .shstrtab: \0.text\0.rodata\0.data\0.rela.text\0.symtab\0.strtab\0.shstrtab\0
+    mut shstrtab = [0]; arr_reset(shstrtab);
+    shstrtab.push(0);                    // @0: ""
+    buf_cstr(shstrtab, ".text");         // @1
+    buf_cstr(shstrtab, ".rodata");       // @7
+    buf_cstr(shstrtab, ".data");         // @15
+    buf_cstr(shstrtab, ".rela.text");    // @21
+    buf_cstr(shstrtab, ".symtab");       // @32
+    buf_cstr(shstrtab, ".strtab");       // @40
+    buf_cstr(shstrtab, ".shstrtab");     // @48
+    let shstr_size = shstrtab.len;
+
+    // Count local symbols (sect==2 = .rodata/cstring)
+    mut n_local = 0;
+    mut si0 = 0;
+    while (si0 < sym_count) {
+        if (sym_buf[si0 * SYM_STRIDE + 2] == 2) { n_local = n_local + 1; }
+        si0 = si0 + 1;
+    }
+    let first_global = 1 + n_local;
+    let n_elf_syms   = 1 + sym_count;
+    let rela_size    = reloc_count * 24;
+    let symtab_size  = n_elf_syms * 24;
+    let strtab_size  = strtab_buf.len;
+
+    // Build ELF symbol index mapping: macho_idx → elf_idx
+    mut idx_map = [0]; arr_reset(idx_map);
+    mut lc = 1; mut gc = first_global;
+    mut si1 = 0;
+    while (si1 < sym_count) {
+        if (sym_buf[si1 * SYM_STRIDE + 2] == 2) {
+            push(idx_map, lc); lc = lc + 1;
+        } else {
+            push(idx_map, gc); gc = gc + 1;
+        }
+        si1 = si1 + 1;
+    }
+
+    // Compute file offsets
+    let text_off     = 64;
+    let rodata_off   = text_off + text_size;
+    let data_off     = elf_align8(rodata_off + rodata_size);
+    let rela_off     = elf_align8(data_off + data_size);
+    let symtab_off   = elf_align8(rela_off + rela_size);
+    let strtab_off   = symtab_off + symtab_size;
+    let shstrtab_off = strtab_off + strtab_size;
+    let shoff        = elf_align8(shstrtab_off + shstr_size);
+
+    // ELF header (64 bytes)
+    buf_u8b(out, 127); buf_u8b(out, 69); buf_u8b(out, 76); buf_u8b(out, 70);  // \x7FELF
+    buf_u8b(out, 2); buf_u8b(out, 1); buf_u8b(out, 1); buf_u8b(out, 0);       // class64, LE, v1, OSABI=0
+    mut pi = 0; while (pi < 8) { buf_u8b(out, 0); pi = pi + 1; }              // padding
+    buf_u16(out, 1);    // e_type = ET_REL
+    buf_u16(out, 183);  // e_machine = EM_AARCH64
+    buf_u32(out, 1);    // e_version
+    buf_u64(out, 0);    // e_entry
+    buf_u64(out, 0);    // e_phoff
+    buf_u64(out, shoff);
+    buf_u32(out, 0);    // e_flags
+    buf_u16(out, 64);   // e_ehsize
+    buf_u16(out, 56);   // e_phentsize
+    buf_u16(out, 0);    // e_phnum
+    buf_u16(out, 64);   // e_shentsize
+    buf_u16(out, 8);    // e_shnum
+    buf_u16(out, 7);    // e_shstrndx = .shstrtab
+
+    // .text
+    mut ti = 0; while (ti < text_size) { buf_u8b(out, text_buf[ti]); ti = ti + 1; }
+    // .rodata
+    mut roi = 0; while (roi < rodata_size) { buf_u8b(out, data_buf[roi]); roi = roi + 1; }
+    buf_align(out, 8);
+    // .data
+    mut di = 0; while (di < data_size) { buf_u8b(out, glob_buf[di]); di = di + 1; }
+    buf_align(out, 8);
+
+    // .rela.text (24 bytes each)
+    mut reli = 0;
+    while (reli < reloc_count) {
+        let base  = reli * RELOC_STRIDE;
+        let raddr = reloc_buf[base];
+        let rsym  = reloc_buf[base + 1];
+        let rtype = reloc_buf[base + 2];
+        let esym  = idx_map[rsym];
+        mut etype = 0;
+        if (rtype == RELOC_BRANCH26)  { etype = R_AARCH64_CALL26; }
+        if (rtype == RELOC_PAGE21)    { etype = R_AARCH64_ADR_PREL_PG_HI21; }
+        if (rtype == RELOC_PAGEOFF12) {
+            if (text_buf[raddr + 3] == 145) { etype = R_AARCH64_ADD_ABS_LO12_NC; }
+            else                             { etype = R_AARCH64_LD64_ABS_LO12_NC; }
+        }
+        buf_u64(out, raddr);
+        buf_u64(out, (esym << 32) | etype);
+        buf_u64(out, 0);
+        reli = reli + 1;
+    }
+    buf_align(out, 8);
+
+    // .symtab (24 bytes each): null, locals, globals
+    buf_u32(out, 0); buf_u8b(out, 0); buf_u8b(out, 0); buf_u16(out, 0); buf_u64(out, 0); buf_u64(out, 0);
+    // Locals (sect==2)
+    mut symi0 = 0;
+    while (symi0 < sym_count) {
+        let sb = symi0 * SYM_STRIDE;
+        if (sym_buf[sb + 2] == 2) {
+            buf_u32(out, sym_buf[sb]); buf_u8b(out, 0); buf_u8b(out, 0);
+            buf_u16(out, 2);
+            buf_u64(out, sym_buf[sb + 4]); buf_u64(out, 0);
+        }
+        symi0 = symi0 + 1;
+    }
+    // Globals
+    mut symi1 = 0;
+    while (symi1 < sym_count) {
+        let sb = symi1 * SYM_STRIDE;
+        let ssect = sym_buf[sb + 2];
+        if (ssect != 2) {
+            mut st_info = 16; mut st_shndx = 0;
+            if (ssect == 1) { st_info = 18; st_shndx = 1; }
+            if (ssect == 3) { st_info = 17; st_shndx = 3; }
+            buf_u32(out, sym_buf[sb]); buf_u8b(out, st_info); buf_u8b(out, 0);
+            buf_u16(out, st_shndx);
+            buf_u64(out, sym_buf[sb + 4]); buf_u64(out, 0);
+        }
+        symi1 = symi1 + 1;
+    }
+
+    // .strtab
+    mut sti = 0; while (sti < strtab_size) { buf_u8b(out, strtab_buf[sti]); sti = sti + 1; }
+    // .shstrtab
+    mut shi = 0; while (shi < shstr_size) { buf_u8b(out, shstrtab[shi]); shi = shi + 1; }
+    buf_align(out, 8);
+
+    // Section header table (8 × 64 bytes)
+    // 0: NULL
+    mut nz = 0; while (nz < 64) { buf_u8b(out, 0); nz = nz + 1; }
+    // 1: .text  SHT_PROGBITS=1, SHF_ALLOC|EXECINSTR=6, align=4
+    buf_u32(out, 1);  buf_u32(out, 1);  buf_u64(out, 6); buf_u64(out, 0);
+    buf_u64(out, text_off);   buf_u64(out, text_size);
+    buf_u32(out, 0);  buf_u32(out, 0);  buf_u64(out, 4); buf_u64(out, 0);
+    // 2: .rodata  SHT_PROGBITS=1, SHF_ALLOC=2, align=1
+    buf_u32(out, 7);  buf_u32(out, 1);  buf_u64(out, 2); buf_u64(out, 0);
+    buf_u64(out, rodata_off); buf_u64(out, rodata_size);
+    buf_u32(out, 0);  buf_u32(out, 0);  buf_u64(out, 1); buf_u64(out, 0);
+    // 3: .data  SHT_PROGBITS=1, SHF_ALLOC|WRITE=3, align=8
+    buf_u32(out, 15); buf_u32(out, 1);  buf_u64(out, 3); buf_u64(out, 0);
+    buf_u64(out, data_off);   buf_u64(out, data_size);
+    buf_u32(out, 0);  buf_u32(out, 0);  buf_u64(out, 8); buf_u64(out, 0);
+    // 4: .rela.text  SHT_RELA=4, sh_link=5, sh_info=1, entsize=24
+    buf_u32(out, 21); buf_u32(out, 4);  buf_u64(out, 0); buf_u64(out, 0);
+    buf_u64(out, rela_off);   buf_u64(out, rela_size);
+    buf_u32(out, 5);  buf_u32(out, 1);  buf_u64(out, 8); buf_u64(out, 24);
+    // 5: .symtab  SHT_SYMTAB=2, sh_link=6, sh_info=first_global, entsize=24
+    buf_u32(out, 32); buf_u32(out, 2);  buf_u64(out, 0); buf_u64(out, 0);
+    buf_u64(out, symtab_off); buf_u64(out, symtab_size);
+    buf_u32(out, 6);  buf_u32(out, first_global); buf_u64(out, 8); buf_u64(out, 24);
+    // 6: .strtab  SHT_STRTAB=3
+    buf_u32(out, 40); buf_u32(out, 3);  buf_u64(out, 0); buf_u64(out, 0);
+    buf_u64(out, strtab_off); buf_u64(out, strtab_size);
+    buf_u32(out, 0);  buf_u32(out, 0);  buf_u64(out, 1); buf_u64(out, 0);
+    // 7: .shstrtab  SHT_STRTAB=3
+    buf_u32(out, 48); buf_u32(out, 3);  buf_u64(out, 0); buf_u64(out, 0);
+    buf_u64(out, shstrtab_off); buf_u64(out, shstr_size);
+    buf_u32(out, 0);  buf_u32(out, 0);  buf_u64(out, 1); buf_u64(out, 0);
+
+    file_write_binary(out, out_path);
+    return 0;
+}
+
 // ── Top-level entry point ─────────────────────────────────────────────────────
 fn codegen_program(int64 structs_list, int64 fns_list, int64 top_list, string out_path) -> int64 {
     // Reset all global state — arr_reset clears length to 0, removing sentinel
@@ -2118,7 +2309,11 @@ fn codegen_program(int64 structs_list, int64 fns_list, int64 top_list, string ou
     // Always emit the C entry point main()
     ncg_main_wrapper(top_list);
 
-    // Write the object file
-    write_macho(out_path);
+    // Write the object file (platform-specific format)
+    if (g_target_linux == 1) {
+        write_elf(out_path);
+    } else {
+        write_macho(out_path);
+    }
     return 0;
 }
