@@ -26,6 +26,7 @@ let TOK_KW_STRING  = 21;
 let TOK_KW_TENSOR  = 22;
 let TOK_KW_VOID    = 23;
 let TOK_KW_MODEL   = 58;
+let TOK_KW_ARRAY   = 65;
 let TOK_AT_GPU = 24;
 let TOK_AT_CPU = 25;
 let TOK_INT_LIT    = 26;
@@ -247,6 +248,7 @@ fn keyword_kind(string s) -> int64 {
     if (str_eq(s, "string"))   { return TOK_KW_STRING; }
     if (str_eq(s, "tensor"))   { return TOK_KW_TENSOR; }
     if (str_eq(s, "model"))    { return TOK_KW_MODEL; }
+    if (str_eq(s, "array"))    { return TOK_KW_ARRAY; }
     if (str_eq(s, "void"))     { return TOK_KW_VOID; }
     return TOK_IDENT;
 }
@@ -642,6 +644,10 @@ fn parse_type(Parser p) -> int64 {
         if (p_kind(p) == TOK_AT_GPU) { p_advance(p); hw = 1; }
         if (p_kind(p) == TOK_AT_CPU) { p_advance(p); hw = 0; }
         return new_node(ND_TY_MODEL, "", hw, 0, 0, 0);
+    }
+    if (k == TOK_KW_ARRAY) {
+        p_advance(p);
+        return new_node(ND_TY_ARRAY, "", 0, new_node(ND_TY_INT64, "", 0, 0, 0, 0), 0, 0);
     }
     if (k == TOK_LBRACKET) {
         p_advance(p);

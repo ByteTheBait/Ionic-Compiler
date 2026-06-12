@@ -133,6 +133,7 @@ fn keyword_kind(string s) -> int64 {
     if (str_eq(s, "string"))   { return TOK_KW_STRING; }
     if (str_eq(s, "tensor"))   { return TOK_KW_TENSOR; }
     if (str_eq(s, "model"))    { return TOK_KW_MODEL; }
+    if (str_eq(s, "array"))    { return TOK_KW_ARRAY; }
     if (str_eq(s, "void"))     { return TOK_KW_VOID; }
     return TOK_IDENT;
 }

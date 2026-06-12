@@ -150,6 +150,10 @@ fn parse_type(Parser p) -> int64 {
         if (p_kind(p) == TOK_AT_CPU) { p_advance(p); hw = 0; }
         return new_node(ND_TY_MODEL, "", hw, 0, 0, 0);
     }
+    if (k == TOK_KW_ARRAY) {
+        p_advance(p);
+        return new_node(ND_TY_ARRAY, "", 0, new_node(ND_TY_INT64, "", 0, 0, 0, 0), 0, 0);
+    }
     if (k == TOK_LBRACKET) {
         p_advance(p);
         let inner = parse_type(p);

@@ -683,6 +683,10 @@ fn ncg_glob_find(string name) -> int64 {
 // Scratch register pool: X9-X15 for ints, D9-D15 for floats
 mut scratch_depth = 0;
 
+// break/continue patch lists — reset at the top of each for-loop
+mut g_break_patches    = [0];
+mut g_continue_patches = [0];
+
 // Register allocator state (reset per function by local_reset)
 mut n_csr        = 0;   // params promoted to X19..X(19+n_csr-1)
 mut csr_base_slot = 0;  // slot index where CSR saves live in the frame
@@ -1473,6 +1477,12 @@ fn ncg_stmt(int64 node) -> int64 {
         let body_block = nd_i4[node];    // ND_BLOCK
         let body_list  = nd_i2[body_block];
 
+        // save outer loop's patch lists
+        mut saved_breaks    = g_break_patches;
+        mut saved_continues = g_continue_patches;
+        g_break_patches    = [0]; arr_reset(g_break_patches);
+        g_continue_patches = [0]; arr_reset(g_continue_patches);
+
         // init i
         let slot = local_def(var_name, 0);
         let off  = local_offset(slot);
@@ -1492,6 +1502,14 @@ fn ncg_stmt(int64 node) -> int64 {
 
         ncg_stmts(body_list);
 
+        // continue lands here (before increment)
+        let cont_addr = text_len();
+        mut ci = 0;
+        while (ci < len(g_continue_patches)) {
+            a64_patch_b(g_continue_patches[ci], cont_addr);
+            ci = ci + 1;
+        }
+
         // i = i + 1
         let ir2 = scratch_push();
         a64_load_fp(ir2, off);
@@ -1502,6 +1520,29 @@ fn ncg_stmt(int64 node) -> int64 {
         a64_b(loop_top - text_len());
         let exit_addr = text_len();
         a64_patch_bcond(patch_exit, exit_addr);
+
+        // break lands here (after loop)
+        mut bi = 0;
+        while (bi < len(g_break_patches)) {
+            a64_patch_b(g_break_patches[bi], exit_addr);
+            bi = bi + 1;
+        }
+
+        // restore outer loop's patch lists
+        g_break_patches    = saved_breaks;
+        g_continue_patches = saved_continues;
+        return 0;
+    }
+
+    if (kind == ND_BREAK) {
+        let patch = a64_b(0);
+        push(g_break_patches, patch);
+        return 0;
+    }
+
+    if (kind == ND_CONTINUE) {
+        let patch = a64_b(0);
+        push(g_continue_patches, patch);
         return 0;
     }
 
