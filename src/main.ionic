@@ -38,6 +38,8 @@ if (sc_error_count != 0) {
     exit(1);
 }
 
+opt_program(fns_list, top_list);
+
 let obj_path = "/tmp/_ionic_native.o";
 g_target_linux = target_is_linux();
 codegen_program(structs_list, fns_list, top_list, obj_path);

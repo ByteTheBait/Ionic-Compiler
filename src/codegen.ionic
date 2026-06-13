@@ -1315,6 +1315,9 @@ fn ncg_call(int64 node) -> int64 {
 fn ncg_stmt(int64 node) -> int64 {
     let kind = nd_kind[node];
 
+    // Inlined block (produced by dead-branch elimination in the optimizer)
+    if (kind == ND_BLOCK) { ncg_stmts(nd_i2[node]); return 0; }
+
     // let / mut declaration
     if (kind == ND_LET) {
         let name    = nd_sv[node];

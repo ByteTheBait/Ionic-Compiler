@@ -1,0 +1,252 @@
+// ── Optimizer: constant folding + algebraic simplification + dead code elim ──
+//
+// Single-pass bottom-up tree rewriter. Runs after semantic check, before codegen.
+// Mutates the AST node arrays in-place; expression rewrites return new node indices.
+
+// ─── Integer constant folding ─────────────────────────────────────────────────
+
+fn opt_fold_int(int64 op, int64 lv, int64 rv) -> int64 {
+    // Returns a new ND_INT node with the folded result, or 0 if cannot fold.
+    if (op == OP_ADD)    { return new_node(ND_INT, "", lv + rv, 0, 0, 0); }
+    if (op == OP_SUB)    { return new_node(ND_INT, "", lv - rv, 0, 0, 0); }
+    if (op == OP_MUL)    { return new_node(ND_INT, "", lv * rv, 0, 0, 0); }
+    if (op == OP_DIV)    { if (rv == 0) { return 0; } return new_node(ND_INT, "", lv / rv, 0, 0, 0); }
+    if (op == OP_MOD)    { if (rv == 0) { return 0; } return new_node(ND_INT, "", lv % rv, 0, 0, 0); }
+    if (op == OP_EQEQ)   { if (lv == rv) { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+    if (op == OP_NEQ)    { if (lv != rv) { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+    if (op == OP_LT)     { if (lv < rv)  { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+    if (op == OP_GT)     { if (lv > rv)  { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+    if (op == OP_LTEQ)   { if (lv <= rv) { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+    if (op == OP_GTEQ)   { if (lv >= rv) { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+    if (op == OP_AND)    { return new_node(ND_INT, "", lv & rv, 0, 0, 0); }
+    if (op == OP_OR)     { return new_node(ND_INT, "", lv | rv, 0, 0, 0); }
+    if (op == OP_BITAND) { return new_node(ND_INT, "", lv & rv, 0, 0, 0); }
+    if (op == OP_BITOR)  { return new_node(ND_INT, "", lv | rv, 0, 0, 0); }
+    if (op == OP_BITXOR) { return new_node(ND_INT, "", lv ^ rv, 0, 0, 0); }
+    if (op == OP_SHL)    { return new_node(ND_INT, "", lv << rv, 0, 0, 0); }
+    if (op == OP_SHR)    { return new_node(ND_INT, "", lv >> rv, 0, 0, 0); }
+    return 0;
+}
+
+// ─── Algebraic simplifications (one operand is a known literal) ───────────────
+
+fn opt_alg(int64 op, int64 ln, int64 rn) -> int64 {
+    // Returns a simplified node or 0 if no simplification applies.
+    let lk  = nd_kind[ln];
+    let rk  = nd_kind[rn];
+    let lv  = nd_iv[ln];
+    let rv  = nd_iv[rn];
+    let lli = lk == ND_INT || lk == ND_BOOL;
+    let rli = rk == ND_INT || rk == ND_BOOL;
+    if (op == OP_ADD  && rli && rv == 0) { return ln; }
+    if (op == OP_ADD  && lli && lv == 0) { return rn; }
+    if (op == OP_SUB  && rli && rv == 0) { return ln; }
+    if (op == OP_MUL  && rli && rv == 1) { return ln; }
+    if (op == OP_MUL  && lli && lv == 1) { return rn; }
+    if (op == OP_DIV  && rli && rv == 1) { return ln; }
+    if (op == OP_BITOR  && rli && rv == 0) { return ln; }
+    if (op == OP_BITOR  && lli && lv == 0) { return rn; }
+    if (op == OP_BITXOR && rli && rv == 0) { return ln; }
+    if (op == OP_BITXOR && lli && lv == 0) { return rn; }
+    if (op == OP_SHL  && rli && rv == 0) { return ln; }
+    if (op == OP_SHR  && rli && rv == 0) { return ln; }
+    return 0;
+}
+
+// ─── Expression optimization ──────────────────────────────────────────────────
+
+fn opt_cons_exprs(int64 list) -> int64 {
+    mut c = list;
+    while (c != 0) {
+        nd_i2[c] = opt_expr(nd_i2[c]);
+        c = nd_i3[c];
+    }
+    return 0;
+}
+
+fn opt_expr(int64 node) -> int64 {
+    if (node == 0) { return 0; }
+    let k = nd_kind[node];
+
+    if (k == ND_INT || k == ND_FLOAT || k == ND_STR || k == ND_BOOL || k == ND_IDENT) {
+        return node;
+    }
+
+    if (k == ND_BINOP) {
+        let op = nd_iv[node];
+        let ln = opt_expr(nd_i2[node]);
+        let rn = opt_expr(nd_i3[node]);
+        nd_i2[node] = ln;
+        nd_i3[node] = rn;
+        let lk = nd_kind[ln];
+        let rk = nd_kind[rn];
+        let lint = lk == ND_INT || lk == ND_BOOL;
+        let rint = rk == ND_INT || rk == ND_BOOL;
+        if (lint && rint) {
+            let folded = opt_fold_int(op, nd_iv[ln], nd_iv[rn]);
+            if (folded != 0) { return folded; }
+        }
+        let simp = opt_alg(op, ln, rn);
+        if (simp != 0) { return simp; }
+        return node;
+    }
+
+    if (k == ND_UNOP) {
+        let op = nd_iv[node];
+        let cn = opt_expr(nd_i2[node]);
+        nd_i2[node] = cn;
+        let ck = nd_kind[cn];
+        if (ck == ND_INT || ck == ND_BOOL) {
+            let v = nd_iv[cn];
+            if (op == OP_NEG)    { return new_node(ND_INT, "", 0 - v, 0, 0, 0); }
+            if (op == OP_NOT)    { if (v == 0) { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
+            if (op == OP_BITNOT) { return new_node(ND_INT, "", ~v, 0, 0, 0); }
+        }
+        return node;
+    }
+
+    if (k == ND_CALL || k == ND_ARRAY_LIT) {
+        opt_cons_exprs(nd_i2[node]);
+        return node;
+    }
+
+    if (k == ND_INDEX) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        nd_i3[node] = opt_expr(nd_i3[node]);
+        return node;
+    }
+
+    if (k == ND_FIELD_ACCESS) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        return node;
+    }
+
+    if (k == ND_METHOD_CALL) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        opt_cons_exprs(nd_i3[node]);
+        return node;
+    }
+
+    if (k == ND_STRUCT_LIT) {
+        opt_cons_field_inits(nd_i2[node]);
+        return node;
+    }
+
+    return node;
+}
+
+// ND_FIELD_INIT: sv=name, i2=value_expr
+fn opt_cons_field_inits(int64 list) -> int64 {
+    mut c = list;
+    while (c != 0) {
+        let fi = nd_i2[c];
+        nd_i2[fi] = opt_expr(nd_i2[fi]);
+        c = nd_i3[c];
+    }
+    return 0;
+}
+
+// ─── Statement optimization ───────────────────────────────────────────────────
+
+fn opt_stmt(int64 node) -> int64 {
+    let k = nd_kind[node];
+
+    if (k == ND_LET) {
+        if (nd_i3[node] != 0) { nd_i3[node] = opt_expr(nd_i3[node]); }
+        return node;
+    }
+
+    if (k == ND_ASSIGN) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        nd_i3[node] = opt_expr(nd_i3[node]);
+        return node;
+    }
+
+    if (k == ND_EXPR_STMT) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        return node;
+    }
+
+    if (k == ND_RETURN) {
+        if (nd_i2[node] != 0) { nd_i2[node] = opt_expr(nd_i2[node]); }
+        return node;
+    }
+
+    if (k == ND_IF) {
+        let cond = opt_expr(nd_i2[node]);
+        nd_i2[node] = cond;
+        let then_block = nd_i3[node];
+        let else_block = nd_i4[node];
+        if (then_block != 0) { opt_stmts(nd_i2[then_block]); }
+        if (else_block != 0) { opt_stmts(nd_i2[else_block]); }
+        // Dead branch elimination on constant condition
+        let ck = nd_kind[cond];
+        if (ck == ND_INT || ck == ND_BOOL) {
+            nd_kind[node] = ND_BLOCK;
+            if (nd_iv[cond] != 0) {
+                nd_i2[node] = nd_i2[then_block];
+            } else {
+                if (else_block != 0) {
+                    nd_i2[node] = nd_i2[else_block];
+                } else {
+                    nd_i2[node] = 0;
+                }
+            }
+        }
+        return node;
+    }
+
+    if (k == ND_WHILE) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        let body = nd_i3[node];
+        if (body != 0) { opt_stmts(nd_i2[body]); }
+        return node;
+    }
+
+    if (k == ND_FOR) {
+        nd_i2[node] = opt_expr(nd_i2[node]);
+        nd_i3[node] = opt_expr(nd_i3[node]);
+        let body = nd_i4[node];
+        if (body != 0) { opt_stmts(nd_i2[body]); }
+        return node;
+    }
+
+    if (k == ND_BLOCK) {
+        opt_stmts(nd_i2[node]);
+        return node;
+    }
+
+    return node;
+}
+
+fn opt_stmts(int64 list) -> int64 {
+    mut cons = list;
+    while (cons != 0) {
+        nd_i2[cons] = opt_stmt(nd_i2[cons]);
+        // Truncate dead code after a return statement
+        if (nd_kind[nd_i2[cons]] == ND_RETURN) {
+            nd_i3[cons] = 0;
+            return list;
+        }
+        cons = nd_i3[cons];
+    }
+    return list;
+}
+
+// ─── Top-level entry point ────────────────────────────────────────────────────
+
+fn opt_fn(int64 fn_node) -> int64 {
+    let body = nd_i4[fn_node];
+    if (body != 0) { opt_stmts(nd_i2[body]); }
+    return 0;
+}
+
+fn opt_program(int64 fns_list, int64 top_list) -> int64 {
+    mut c = fns_list;
+    while (c != 0) {
+        opt_fn(nd_i2[c]);
+        c = nd_i3[c];
+    }
+    opt_stmts(top_list);
+    return 0;
+}

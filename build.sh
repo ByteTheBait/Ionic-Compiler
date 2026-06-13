@@ -16,6 +16,7 @@ SOURCES="
   src/parser/ast.ionic
   src/parser/parser.ionic
   src/semantic/checker.ionic
+  src/opt/opt.ionic
   src/codegen/native.ionic
   src/main.ionic
 "
