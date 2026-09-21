@@ -180,6 +180,23 @@ int64_t ionic_fabs(int64_t b) { return d2i64(fabs(i642d(b))); }
 int64_t ionic_int64_to_float64(int64_t v) { return d2i64((double)v); }
 int64_t ionic_float64_to_int64(int64_t b) { return (int64_t)i642d(b); }
 
+/* Compile-time float arithmetic — used by the optimizer to fold floats when
+   ionic_new runs. Same int64 bit-pattern ABI as all other float builtins.
+   Return type is int64 (the bit pattern) so the optimizer can store results
+   directly into nd_iv of freshly-built ND_FLOAT nodes. These are plain-named
+   (no ionic_ prefix) so call sites resolve identically through both the old
+   bootstrap (ionic_self) and the self-hosted ionic_new. */
+int64_t fadd_bits(int64_t a, int64_t b) { return d2i64(i642d(a) + i642d(b)); }
+int64_t fsub_bits(int64_t a, int64_t b) { return d2i64(i642d(a) - i642d(b)); }
+int64_t fmul_bits(int64_t a, int64_t b) { return d2i64(i642d(a) * i642d(b)); }
+int64_t fdiv_bits(int64_t a, int64_t b) { return d2i64(i642d(a) / i642d(b)); }
+int64_t sqrt_bits(int64_t b)            { return d2i64(sqrt(i642d(b))); }
+int64_t fabs_bits(int64_t b)            { return d2i64(fabs(i642d(b))); }
+int64_t floor_bits(int64_t b)           { return d2i64(floor(i642d(b))); }
+int64_t ceil_bits(int64_t b)            { return d2i64(ceil(i642d(b))); }
+int64_t pow_bits(int64_t a, int64_t b)  { return d2i64(pow(i642d(a), i642d(b))); }
+int64_t int_to_fbits(int64_t v)         { return d2i64((double)v); }
+
 /* ── Float literal parsing (used internally by the Ionic parser) ─────────── */
 /* No ionic_ prefix — ionic_self generates _str_to_float64_bits directly */
 int64_t str_to_float64_bits(const char *s) {

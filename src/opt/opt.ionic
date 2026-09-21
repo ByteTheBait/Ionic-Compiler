@@ -28,6 +28,47 @@ fn opt_fold_int(int64 op, int64 lv, int64 rv) -> int64 {
     return 0;
 }
 
+// ─── Float constant folding ───────────────────────────────────────────────────
+// Floats are stored in ND_FLOAT nodes as their IEEE-754 bit pattern in nd_iv
+// (the native codegen emits that value directly). Folding therefore computes the
+// result bit pattern at compile time via runtime helpers and stores it in a new
+// ND_FLOAT node. Mixed int/float operands are promoted to float first.
+fn opt_fold_float(int64 op, int64 lbits, int64 rbits) -> int64 {
+    if (op == OP_FADD) { return new_node(ND_FLOAT, "", fadd_bits(lbits, rbits), 0, 0, 0); }
+    if (op == OP_FSUB) { return new_node(ND_FLOAT, "", fsub_bits(lbits, rbits), 0, 0, 0); }
+    if (op == OP_FMUL) { return new_node(ND_FLOAT, "", fmul_bits(lbits, rbits), 0, 0, 0); }
+    if (op == OP_FDIV) { return new_node(ND_FLOAT, "", fdiv_bits(lbits, rbits), 0, 0, 0); }
+    return 0;
+}
+
+// Fold a builtin float function call when all args are constant floats.
+// Returns a new ND_FLOAT node with the result bit pattern, or 0 if not foldable.
+fn opt_fold_float_call(string callee, int64 head) -> int64 {
+    // single-arg float builtins: sqrt, fabs, floor, ceil
+    if (str_eq(callee, "sqrt") || str_eq(callee, "fabs") ||
+        str_eq(callee, "floor") || str_eq(callee, "ceil")) {
+        if (head == 0) { return 0; }
+        if (nd_i3[head] != 0) { return 0; }   // must be exactly one arg
+        let a = nd_i2[head];
+        if (nd_kind[a] != ND_FLOAT) { return 0; }
+        let bits = nd_iv[a];
+        let r = opt_float_unop(callee, bits);
+        if (r != 0) { return r; }
+        return 0;
+    }
+    return 0;
+}
+
+// Compute a single-arg float builtin bit pattern at compile time.
+fn opt_float_unop(string callee, int64 bits) -> int64 {
+    mut rb = 0;
+    if (str_eq(callee, "sqrt"))  { rb = sqrt_bits(bits); }
+    if (str_eq(callee, "fabs"))  { rb = fabs_bits(bits); }
+    if (str_eq(callee, "floor")) { rb = floor_bits(bits); }
+    if (str_eq(callee, "ceil"))  { rb = ceil_bits(bits); }
+    return new_node(ND_FLOAT, "", rb, 0, 0, 0);
+}
+
 // ─── Algebraic simplifications (one operand is a known literal) ───────────────
 
 fn opt_alg(int64 op, int64 ln, int64 rn) -> int64 {
@@ -88,6 +129,23 @@ fn opt_expr(int64 node) -> int64 {
         }
         let simp = opt_alg(op, ln, rn);
         if (simp != 0) { return simp; }
+
+        // Float constant folding: both operands are float literals (or an
+        // int literal promoted to float). Compute the result bit pattern at
+        // compile time when the operation is a float arithmetic op.
+        if (op == OP_FADD || op == OP_FSUB || op == OP_FMUL || op == OP_FDIV) {
+            mut lb = -1;
+            mut rb = -1;
+            // Use bit-pattern helpers (return int64) so self-host type-checks.
+            if (lk == ND_FLOAT) { lb = nd_iv[ln]; }
+            else if (lint)      { lb = int_to_fbits(nd_iv[ln]); }
+            if (rk == ND_FLOAT) { rb = nd_iv[rn]; }
+            else if (rint)      { rb = int_to_fbits(nd_iv[rn]); }
+            if (lb != -1 && rb != -1) {
+                let folded = opt_fold_float(op, lb, rb);
+                if (folded != 0) { return folded; }
+            }
+        }
         return node;
     }
 
@@ -102,10 +160,23 @@ fn opt_expr(int64 node) -> int64 {
             if (op == OP_NOT)    { if (v == 0) { return new_node(ND_INT, "", 1, 0, 0, 0); } return new_node(ND_INT, "", 0, 0, 0, 0); }
             if (op == OP_BITNOT) { return new_node(ND_INT, "", ~v, 0, 0, 0); }
         }
+        // Negating a float constant: flip the sign bit in the bit pattern.
+        if (ck == ND_FLOAT && op == OP_NEG) {
+            return new_node(ND_FLOAT, "", fsub_bits(0, nd_iv[cn]), 0, 0, 0);
+        }
         return node;
     }
 
     if (k == ND_CALL || k == ND_ARRAY_LIT) {
+        if (k == ND_CALL) {
+            let callee = nd_sv[node];
+            // Fold float builtins on constant float args.
+            if (str_eq(callee, "sqrt") || str_eq(callee, "fabs") ||
+                str_eq(callee, "floor") || str_eq(callee, "ceil")) {
+                let folded = opt_fold_float_call(callee, nd_i2[node]);
+                if (folded != 0) { return folded; }
+            }
+        }
         opt_cons_exprs(nd_i2[node]);
         return node;
     }

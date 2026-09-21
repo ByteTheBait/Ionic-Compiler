@@ -456,6 +456,15 @@ fn register_builtins() -> int64 {
     register_builtin("pow",               2, TY_FLOAT64, "");
     register_builtin("floor",             1, TY_FLOAT64, "");
     register_builtin("ceil",              1, TY_FLOAT64, "");
+    register_builtin("fadd_bits",         2, TY_INT64,   "");
+    register_builtin("fsub_bits",         2, TY_INT64,   "");
+    register_builtin("fmul_bits",         2, TY_INT64,   "");
+    register_builtin("fdiv_bits",         2, TY_INT64,   "");
+    register_builtin("sqrt_bits",         1, TY_INT64,   "");
+    register_builtin("fabs_bits",         1, TY_INT64,   "");
+    register_builtin("floor_bits",        1, TY_INT64,   "");
+    register_builtin("ceil_bits",         1, TY_INT64,   "");
+    register_builtin("int_to_fbits",      1, TY_INT64,   "");
     register_builtin("format",           -1, TY_STR,     "");
     // ML / model inference
     register_builtin("load_model",        1, TY_MODEL_CPU,"");
