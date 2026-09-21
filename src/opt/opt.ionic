@@ -258,6 +258,143 @@ fn opt_stmts_has_control(int64 list) -> bool {
     return false;
 }
 
+// ─── Function inlining (leaf functions) ───────────────────────────────────────
+// Inline "leaf" pure functions: bodies that are exactly a single
+// `return <expr>` where `<expr>` contains no function calls and no
+// control flow. We rewrite the call site to the cloned return expression
+// with each parameter substituted by its (already-optimized) argument.
+// This avoids recursion/aliasing hazards and the need to lower multi-statement
+// bodies with jump-to-end lowering.
+
+mut inline_names    = [""];
+mut inline_bodies   = [0];   // ND_RETURN node's expression (the pure body expr)
+mut inline_params   = [0];   // ND_PARAM list (for param names)
+mut inline_count    = 0;
+
+// Does `node` contain any ND_CALL or ND_METHOD_CALL? (Guards against recursion
+// and side-effecting calls inside an inlined body.)
+fn opt_has_call(int64 node) -> bool {
+    if (node == 0) { return false; }
+    let k = nd_kind[node];
+    if (k == ND_CALL || k == ND_METHOD_CALL) { return true; }
+    if (k == ND_BINOP) {
+        if (opt_has_call(nd_i2[node])) { return true; }
+        if (opt_has_call(nd_i3[node])) { return true; }
+        return false;
+    }
+    if (k == ND_UNOP)        { return opt_has_call(nd_i2[node]); }
+    if (k == ND_INDEX) {
+        if (opt_has_call(nd_i2[node])) { return true; }
+        if (opt_has_call(nd_i3[node])) { return true; }
+        return false;
+    }
+    if (k == ND_FIELD_ACCESS) { return opt_has_call(nd_i2[node]); }
+    if (k == ND_ARRAY_LIT)   { return opt_has_call(nd_i2[node]); }
+    if (k == ND_STRUCT_LIT)  { return opt_has_call(nd_i2[node]); }
+    if (k == ND_FIELD_INIT)  { return opt_has_call(nd_i2[node]); }
+    if (k == ND_TO_GPU || k == ND_TO_CPU) { return opt_has_call(nd_i2[node]); }
+    return false;
+}
+
+// Collect inline-able pure functions into the global table.
+fn opt_collect_inlineables(int64 fns_list) -> int64 {
+    mut fnode = fns_list;
+    while (fnode != 0) {
+        let def = nd_i2[fnode];
+        let name = nd_sv[def];
+        let params_list = nd_i2[def];
+        let body_block  = nd_i4[def];
+        // Skip main and recursive definitions (recursion is a user call we
+        // can't safely inline) — just try to find the single-return body.
+        if (body_block != 0) {
+            let body_list = nd_i2[body_block];
+            // Single statement: ND_CONS node whose head is ND_RETURN.
+            if (body_list != 0 && nd_i3[body_list] == 0) {
+                let stmt = nd_i2[body_list];
+                if (nd_kind[stmt] == ND_RETURN) {
+                    let expr = nd_i2[stmt];
+                    if (expr != 0 && opt_has_call(expr) == false) {
+                        inline_count = inline_count + 1;
+                        if (inline_count < len(inline_names)) {
+                            inline_names[inline_count]  = name;
+                            inline_bodies[inline_count] = expr;
+                            inline_params[inline_count] = params_list;
+                        } else {
+                            push(inline_names, name);
+                            push(inline_bodies, expr);
+                            push(inline_params, params_list);
+                        }
+                    }
+                }
+            }
+        }
+        fnode = nd_i3[fnode];
+    }
+    return 0;
+}
+
+fn inline_find(string name) -> int64 {
+    mut i = 1;
+    while (i <= inline_count) {
+        if (str_eq(inline_names[i], name)) { return i; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Like opt_subst_var but substitutes an ND_IDENT named `var` with a *cloned*
+// `rep` node (used to replace a parameter by its argument expression).
+fn opt_subst_general(int64 node, string var, int64 rep) -> int64 {
+    if (node == 0) { return 0; }
+    let k = nd_kind[node];
+    if (k == ND_IDENT && str_eq(nd_sv[node], var)) {
+        return opt_clone_node(rep);
+    }
+    if (k == ND_BINOP) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+        nd_i3[node] = opt_subst_general(nd_i3[node], var, rep);
+    } else if (k == ND_UNOP) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+    } else if (k == ND_INDEX) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+        nd_i3[node] = opt_subst_general(nd_i3[node], var, rep);
+    } else if (k == ND_FIELD_ACCESS) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+    } else if (k == ND_ARRAY_LIT) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+    } else if (k == ND_STRUCT_LIT) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+    } else if (k == ND_FIELD_INIT) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+    } else if (k == ND_TO_GPU || k == ND_TO_CPU) {
+        nd_i2[node] = opt_subst_general(nd_i2[node], var, rep);
+    }
+    return node;
+}
+
+// Try to inline `node` (an ND_CALL) if it names an inline-able function.
+// Returns the rewritten expression (0 = leave the call alone).
+fn opt_try_inline(int64 node) -> int64 {
+    let callee = nd_sv[node];
+    let ii = inline_find(callee);
+    if (ii == 0) { return 0; }
+    // Clone the function's pure body expression as our working copy.
+    mut body = opt_clone_node(inline_bodies[ii]);
+    // Walk the call's argument list and the parameter list in lockstep,
+    // substituting each parameter by its (already-optimized) argument.
+    mut an = nd_i2[node];    // args CONS list
+    mut pn = inline_params[ii];
+    while (pn != 0 && an != 0) {
+        let pname = nd_sv[nd_i2[pn]];
+        let arg = nd_i2[an];
+        body = opt_subst_general(body, pname, arg);
+        pn = nd_i3[pn];
+        an = nd_i3[an];
+    }
+    // Optimize the fully-substituted body.
+    return opt_expr(body);
+}
+
 // ─── Algebraic simplifications (one operand is a known literal) ───────────────
 
 fn opt_alg(int64 op, int64 ln, int64 rn) -> int64 {
@@ -365,6 +502,11 @@ fn opt_expr(int64 node) -> int64 {
                 let folded = opt_fold_float_call(callee, nd_i2[node]);
                 if (folded != 0) { return folded; }
             }
+            // Optimize the arguments first, then attempt function inlining.
+            opt_cons_exprs(nd_i2[node]);
+            let inlined = opt_try_inline(node);
+            if (inlined != 0) { return inlined; }
+            return node;
         }
         opt_cons_exprs(nd_i2[node]);
         return node;
@@ -557,11 +699,18 @@ fn opt_fn(int64 fn_node) -> int64 {
 }
 
 fn opt_program(int64 fns_list, int64 top_list) -> int64 {
+    // Reset inline table (a fresh compile starts clean). Arrays are
+    // pre-initialized singletons and use 1-based indexing, so don't arr_reset.
+    inline_count = 0;
+    // Collect leaf pure functions that are safe to inline.
+    opt_collect_inlineables(fns_list);
+    // Optimize each function body.
     mut c = fns_list;
     while (c != 0) {
         opt_fn(nd_i2[c]);
         c = nd_i3[c];
     }
+    // Optimize top-level statements.
     opt_stmts(top_list);
     return 0;
 }
