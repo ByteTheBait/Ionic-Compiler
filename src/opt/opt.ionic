@@ -69,6 +69,195 @@ fn opt_float_unop(string callee, int64 bits) -> int64 {
     return new_node(ND_FLOAT, "", rb, 0, 0, 0);
 }
 
+// ─── Deep clone with loop-variable substitution (for loop unrolling) ─────────
+// Returns a deep copy of `node` where every ND_IDENT named `var` is replaced by
+// an ND_INT literal with value `val`. Used to flatten one iteration of a for
+// loop whose bounds are compile-time integer constants. new_node appends to the
+// global node arrays, so cloning is always safe.
+
+fn opt_clone_node(int64 node) -> int64 {
+    if (node == 0) { return 0; }
+    let k = nd_kind[node];
+    // Leaf nodes
+    if (k == ND_INT)   { return new_node(ND_INT, "", nd_iv[node], 0, 0, 0); }
+    if (k == ND_BOOL)  { return new_node(ND_BOOL, "", nd_iv[node], 0, 0, 0); }
+    if (k == ND_STR)   { return new_node(ND_STR, nd_sv[node], nd_iv[node], 0, 0, 0); }
+    if (k == ND_FLOAT) { return new_node(ND_FLOAT, nd_sv[node], nd_iv[node], 0, 0, 0); }
+
+    // Unary / binary operators
+    if (k == ND_UNOP) {
+        return new_node(ND_UNOP, "", nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_BINOP) {
+        return new_node(ND_BINOP, "", nd_iv[node], opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), 0);
+    }
+    if (k == ND_INDEX) {
+        return new_node(ND_INDEX, "", nd_iv[node], opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), 0);
+    }
+    if (k == ND_FIELD_ACCESS) {
+        return new_node(ND_FIELD_ACCESS, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_CALL) {
+        return new_node(ND_CALL, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_METHOD_CALL) {
+        return new_node(ND_METHOD_CALL, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), 0);
+    }
+    if (k == ND_ARRAY_LIT) {
+        return new_node(ND_ARRAY_LIT, "", nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_STRUCT_LIT) {
+        return new_node(ND_STRUCT_LIT, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_FIELD_INIT) {
+        return new_node(ND_FIELD_INIT, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_TO_GPU) {
+        return new_node(ND_TO_GPU, "", nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_TO_CPU) {
+        return new_node(ND_TO_CPU, "", nd_iv[node], opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_IDENT) {
+        return node;  // leave identifiers as-is (no variable renaming inside for body)
+    }
+
+    // Statement nodes
+    if (k == ND_BLOCK) {
+        return new_node(ND_BLOCK, "", 0, opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_LET) {
+        return new_node(ND_LET, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), nd_i4[node]);
+    }
+    if (k == ND_ASSIGN) {
+        return new_node(ND_ASSIGN, "", 0, opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), 0);
+    }
+    if (k == ND_EXPR_STMT) {
+        return new_node(ND_EXPR_STMT, "", 0, opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_RETURN) {
+        return new_node(ND_RETURN, "", 0, opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_IF) {
+        return new_node(ND_IF, "", 0, opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), opt_clone_node(nd_i4[node]));
+    }
+    if (k == ND_WHILE) {
+        return new_node(ND_WHILE, "", 0, opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), 0);
+    }
+    if (k == ND_FOR) {
+        return new_node(ND_FOR, nd_sv[node], nd_iv[node], opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), opt_clone_node(nd_i4[node]));
+    }
+    if (k == ND_GPU_BLOCK) {
+        return new_node(ND_GPU_BLOCK, "", 0, opt_clone_node(nd_i2[node]), 0, 0);
+    }
+    if (k == ND_BREAK || k == ND_CONTINUE || k == ND_IMPORT_STMT) {
+        return new_node(k, "", 0, 0, 0, 0);
+    }
+
+    // CONS-list node — walk chain preserving structure
+    if (k == ND_CONS) {
+        return new_node(ND_CONS, "", 0, opt_clone_node(nd_i2[node]), opt_clone_node(nd_i3[node]), 0);
+    }
+
+    return node;
+}
+
+// Replace ND_IDENT(var) with ND_INT(val) throughout an already-cloned subtree.
+fn opt_subst_var(int64 node, string var, int64 val) -> int64 {
+    if (node == 0) { return 0; }
+    let k = nd_kind[node];
+    if (k == ND_IDENT && str_eq(nd_sv[node], var)) {
+        return new_node(ND_INT, "", val, 0, 0, 0);
+    }
+    if (k == ND_BINOP) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    } else if (k == ND_UNOP) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_CALL) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_METHOD_CALL) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    } else if (k == ND_INDEX) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    } else if (k == ND_FIELD_ACCESS) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_ARRAY_LIT) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_STRUCT_LIT) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_FIELD_INIT) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_TO_GPU || k == ND_TO_CPU) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_RETURN) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_EXPR_STMT) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_LET) {
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    } else if (k == ND_ASSIGN) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    } else if (k == ND_IF) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+        nd_i4[node] = opt_subst_var(nd_i4[node], var, val);
+    } else if (k == ND_FOR) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+        nd_i4[node] = opt_subst_var(nd_i4[node], var, val);
+    } else if (k == ND_WHILE) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    } else if (k == ND_GPU_BLOCK) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_BLOCK) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+    } else if (k == ND_CONS) {
+        nd_i2[node] = opt_subst_var(nd_i2[node], var, val);
+        nd_i3[node] = opt_subst_var(nd_i3[node], var, val);
+    }
+    return node;
+}
+
+// ─── Statement-level helpers ────────────────────────────────────────────────────
+// Recursively check a statement subtree for break/continue (unrolling is only
+// safe when none are present).
+fn opt_stmt_has_control(int64 node) -> bool {
+    if (node == 0) { return false; }
+    let k = nd_kind[node];
+    if (k == ND_BREAK || k == ND_CONTINUE) { return true; }
+    if (k == ND_BLOCK) { return opt_stmts_has_control(nd_i2[node]); }
+    if (k == ND_IF) {
+        if (opt_stmt_has_control(nd_i2[node])) { return true; }
+        if (opt_stmt_has_control(nd_i3[node])) { return true; }
+        if (opt_stmt_has_control(nd_i4[node])) { return true; }
+    }
+    if (k == ND_WHILE) {
+        if (opt_stmt_has_control(nd_i2[node])) { return true; }
+        if (opt_stmt_has_control(nd_i3[node])) { return true; }
+    }
+    if (k == ND_FOR) {
+        if (opt_stmt_has_control(nd_i4[node])) { return true; }
+    }
+    if (k == ND_GPU_BLOCK) {
+        if (opt_stmt_has_control(nd_i2[node])) { return true; }
+    }
+    return false;
+}
+
+fn opt_stmts_has_control(int64 list) -> bool {
+    mut c = list;
+    while (c != 0) {
+        if (opt_stmt_has_control(nd_i2[c])) { return true; }
+        c = nd_i3[c];
+    }
+    return false;
+}
+
 // ─── Algebraic simplifications (one operand is a known literal) ───────────────
 
 fn opt_alg(int64 op, int64 ln, int64 rn) -> int64 {
@@ -275,10 +464,65 @@ fn opt_stmt(int64 node) -> int64 {
     }
 
     if (k == ND_FOR) {
-        nd_i2[node] = opt_expr(nd_i2[node]);
-        nd_i3[node] = opt_expr(nd_i3[node]);
+        // Only unroll when both bounds are compile-time integer constants.
+        let var = nd_sv[node];
+        let start_nd = opt_expr(nd_i2[node]);
+        let end_nd   = opt_expr(nd_i3[node]);
+        nd_i2[node] = start_nd;
+        nd_i3[node] = end_nd;
         let body = nd_i4[node];
-        if (body != 0) { opt_stmts(nd_i2[body]); }
+        mut body_list = 0;
+        if (body != 0) { body_list = nd_i2[body]; }
+
+        mut is_small = 0;
+        if (start_nd != 0 && end_nd != 0 &&
+            nd_kind[start_nd] == ND_INT && nd_kind[end_nd] == ND_INT) {
+            let lo = nd_iv[start_nd];
+            let hi = nd_iv[end_nd];
+            if (hi >= lo && (hi - lo) <= 8) { is_small = 1; }
+        }
+
+        if (is_small == 1 && opt_stmts_has_control(body_list) == false) {
+            let lo = nd_iv[start_nd];
+            let hi = nd_iv[end_nd];
+            let trip = hi - lo;
+            // Flatten N iterations: for each it, clone the body (deep) then
+            // substitute the loop var with its literal index value.
+            mut head = 0;      // resulting statement list (ND_CONS chain)
+            mut tail = 0;
+            mut it = 0;
+            while (it < trip) {
+                let inst_idx = lo + it;
+                // Clone whole CONS list (statements).
+                let cloned_list = opt_clone_node(body_list);
+                // Substitute var→index in the cloned statements.
+                opt_subst_var(cloned_list, var, inst_idx);
+                // Optimize the cloned iteration, then append each statement.
+                mut cc2 = cloned_list;
+                while (cc2 != 0) {
+                    let stmt = opt_stmt(nd_i2[cc2]);
+                    nd_i2[cc2] = stmt;
+                    // append to output list
+                    let nc = new_node(ND_CONS, "", 0, stmt, 0, 0);
+                    if (head == 0) { head = nc; }
+                    else           { nd_i3[tail] = nc; }
+                    tail = nc;
+                    cc2 = nd_i3[cc2];
+                }
+                it = it + 1;
+            }
+            // If body was empty or trip<=0, we produce an empty block.
+            if (head == 0) { head = 0; }
+            // Replace the for-loop node with an inlined ND_BLOCK.
+            nd_kind[node] = ND_BLOCK;
+            nd_i2[node]   = head;
+            nd_i3[node]   = 0;
+            nd_i4[node]   = 0;
+            return node;
+        }
+
+        let body2 = nd_i4[node];
+        if (body2 != 0) { opt_stmts(nd_i2[body2]); }
         return node;
     }
 
