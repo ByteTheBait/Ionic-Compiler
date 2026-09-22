@@ -435,6 +435,12 @@ fn opt_expr(int64 node) -> int64 {
     if (node == 0) { return 0; }
     let k = nd_kind[node];
 
+    if (k == ND_IDENT && cp_active == 1) {
+        // Replace references to provably-immutable locals with their literals.
+        let sub = cp_pc_subst(node);
+        return sub;
+    }
+
     if (k == ND_INT || k == ND_FLOAT || k == ND_STR || k == ND_BOOL || k == ND_IDENT) {
         return node;
     }
@@ -546,6 +552,188 @@ fn opt_cons_field_inits(int64 list) -> int64 {
         c = nd_i3[c];
     }
     return 0;
+}
+
+// ─── Scoped constant propagation (immutable `let` → literal) ────────────────
+// Per-function subset of mem2reg: if a name is declared `let x = <literal>`
+// and is never assigned to anywhere in the function (and not a `mut`), then
+// every reference to x can be replaced by that literal. This is purely
+// conservative — it only fires when the binding is provably constant across
+// the whole function, so it can never change program semantics.
+
+let CP_SZ = 256;            // max tracked constants per function
+mut cp_pc_names = [""];     // name (1-based)
+mut cp_pc_ivals = [0];
+mut cp_pc_flags = [0];     // 0=none, 1=int, 2=float
+mut cp_pc_count  = 0;
+mut cp_active = 0;          // 1 while inside a function being const-propagated
+
+fn cp_pc_reset() -> int64 {
+    cp_pc_count = 0;
+    return 0;
+}
+
+fn cp_pc_is_const(string name) -> int64 {
+    mut i = 1;
+    while (i <= cp_pc_count) {
+        if (str_eq(cp_pc_names[i], name)) { return i; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn cp_pc_add_int(string name, int64 v) -> int64 {
+    if (cp_pc_count >= CP_SZ) { return 0; }
+    cp_pc_count = cp_pc_count + 1;
+    if (cp_pc_count < len(cp_pc_names)) {
+        cp_pc_names[cp_pc_count] = name;
+        cp_pc_ivals[cp_pc_count] = v;
+        cp_pc_flags[cp_pc_count] = 1;
+    } else {
+        push(cp_pc_names, name);
+        push(cp_pc_ivals, v);
+        push(cp_pc_flags, 1);
+    }
+    return 1;
+}
+
+fn cp_pc_add_float(string name, int64 bits) -> int64 {
+    if (cp_pc_count >= CP_SZ) { return 0; }
+    cp_pc_count = cp_pc_count + 1;
+    if (cp_pc_count < len(cp_pc_names)) {
+        cp_pc_names[cp_pc_count] = name;
+        cp_pc_ivals[cp_pc_count] = bits;
+        cp_pc_flags[cp_pc_count] = 2;
+    } else {
+        push(cp_pc_names, name);
+        push(cp_pc_ivals, bits);
+        push(cp_pc_flags, 2);
+    }
+    return 1;
+}
+
+fn cp_pc_drop(string name) -> int64 {
+    mut i = 1;
+    while (i <= cp_pc_count) {
+        if (str_eq(cp_pc_names[i], name)) {
+            cp_pc_flags[i] = 0;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Scan a statement list for `let x = lit` (record) and assignments to x / `mut`
+// (invalidate). This is the prepass: it must run before any propagation so that
+// we only fold names that are constant across the *whole* function.
+fn cp_pc_scan_stmt_list(int64 list, int64 in_fn) -> int64 {
+    mut c = list;
+    while (c != 0) {
+        let s = nd_i2[c];
+        cp_pc_scan_stmt(s, in_fn);
+        c = nd_i3[c];
+    }
+    return 0;
+}
+
+fn cp_pc_scan_stmt(int64 node, int64 in_fn) -> int64 {
+    if (node == 0) { return 0; }
+    let k = nd_kind[node];
+
+    if (k == ND_LET) {
+        let name = nd_sv[node];
+        let mut_flag = nd_iv[node];
+        let init = nd_i3[node];
+        if (mut_flag != 0) {
+            cp_pc_drop(name);              // `mut` → not a compile-time const
+        } else if (init != 0 && nd_kind[init] == ND_INT) {
+            cp_pc_add_int(name, nd_iv[init]);
+        } else if (init != 0 && nd_kind[init] == ND_FLOAT) {
+            cp_pc_add_float(name, nd_iv[init]);
+        } else {
+            cp_pc_drop(name);              // non-literal init → not provably const
+        }
+    } else if (k == ND_ASSIGN) {
+        let tgt = nd_i2[node];
+        if (nd_kind[tgt] == ND_IDENT) {
+            cp_pc_drop(nd_sv[tgt]);        // reassigned → can't propagate
+        }
+    } else if (k == ND_IF) {
+        // Branches can reassign — invalidate names assigned in either branch.
+        if (nd_i3[node] != 0) { cp_pc_scan_stmt_list(nd_i2[nd_i3[node]], in_fn); }
+        if (nd_i4[node] != 0) { cp_pc_scan_stmt_list(nd_i2[nd_i4[node]], in_fn); }
+    } else if (k == ND_WHILE) {
+        if (nd_i3[node] != 0) { cp_pc_scan_stmt_list(nd_i2[nd_i3[node]], in_fn); }
+    } else if (k == ND_FOR) {
+        if (nd_i4[node] != 0) { cp_pc_scan_stmt_list(nd_i2[nd_i4[node]], in_fn); }
+    } else if (k == ND_BLOCK) {
+        cp_pc_scan_stmt_list(nd_i2[node], in_fn);
+    }
+    return 0;
+}
+
+// Replace ND_IDENT references to the current function's const table with their
+// literal node. Returns a rewritten node, or the same node.
+fn cp_pc_subst(int64 node) -> int64 {
+    if (node == 0) { return 0; }
+    let k = nd_kind[node];
+    if (k == ND_IDENT) {
+        let name = nd_sv[node];
+        let idx = cp_pc_is_const(name);
+        if (idx != 0) {
+            if (cp_pc_flags[idx] == 1) {
+                return new_node(ND_INT, "", cp_pc_ivals[idx], 0, 0, 0);
+            } else if (cp_pc_flags[idx] == 2) {
+                return new_node(ND_FLOAT, "", cp_pc_ivals[idx], 0, 0, 0);
+            }
+        }
+        return node;
+    }
+    if (k == ND_BINOP) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        nd_i3[node] = cp_pc_subst(nd_i3[node]);
+        return node;
+    }
+    if (k == ND_UNOP) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    if (k == ND_CALL) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    if (k == ND_INDEX) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        nd_i3[node] = cp_pc_subst(nd_i3[node]);
+        return node;
+    }
+    if (k == ND_FIELD_ACCESS) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    if (k == ND_METHOD_CALL) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        nd_i3[node] = cp_pc_subst(nd_i3[node]);
+        return node;
+    }
+    if (k == ND_ARRAY_LIT) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    if (k == ND_STRUCT_LIT) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    if (k == ND_FIELD_INIT) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    if (k == ND_TO_GPU || k == ND_TO_CPU) {
+        nd_i2[node] = cp_pc_subst(nd_i2[node]);
+        return node;
+    }
+    return node;
 }
 
 // ─── Statement optimization ───────────────────────────────────────────────────
@@ -693,8 +881,16 @@ fn opt_stmts(int64 list) -> int64 {
 // ─── Top-level entry point ────────────────────────────────────────────────────
 
 fn opt_fn(int64 fn_node) -> int64 {
-    let body = nd_i4[fn_node];
-    if (body != 0) { opt_stmts(nd_i2[body]); }
+    // Scoped const propagation: pre-scan to collect `let x = const` bindings
+    // that are never reassigned anywhere in this function, then substitute them.
+    cp_pc_reset();
+    let body_block = nd_i4[fn_node];
+    if (body_block != 0) {
+        cp_pc_scan_stmt_list(nd_i2[body_block], 1);
+    }
+    cp_active = 1;
+    if (body_block != 0) { opt_stmts(nd_i2[body_block]); }
+    cp_active = 0;
     return 0;
 }
 
