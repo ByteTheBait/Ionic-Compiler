@@ -14,6 +14,11 @@ fn tok_desc(int64 kind) -> string {
     if (kind == TOK_DOT_DOT)  { return "'..'"; }
     if (kind == TOK_IN)       { return "'in'"; }
     if (kind == TOK_IDENT)    { return "identifier"; }
+    if (kind == TOK_PLUS_EQ)  { return "'+='"; }
+    if (kind == TOK_MINUS_EQ) { return "'-='"; }
+    if (kind == TOK_STAR_EQ)  { return "'*='"; }
+    if (kind == TOK_SLASH_EQ) { return "'/='"; }
+    if (kind == TOK_BAD_CHAR) { return "bad-char"; }
     return str_concat("token#", int64_to_str(kind));
 }
 

@@ -67,6 +67,11 @@ let TOK_TILDE    = 62;
 let TOK_LT_LT   = 63;
 let TOK_GT_GT   = 64;
 let TOK_KW_ARRAY = 65;
+let TOK_PLUS_EQ  = 66;
+let TOK_MINUS_EQ = 67;
+let TOK_STAR_EQ  = 68;
+let TOK_SLASH_EQ = 69;
+let TOK_BAD_CHAR = 70;
 
 // ── ASCII char constants ─────────────────────────────────────────────────────
 let CH_NL        = 10;

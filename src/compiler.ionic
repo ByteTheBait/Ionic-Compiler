@@ -27,6 +27,11 @@ let TOK_KW_TENSOR  = 22;
 let TOK_KW_VOID    = 23;
 let TOK_KW_MODEL   = 58;
 let TOK_KW_ARRAY   = 65;
+let TOK_PLUS_EQ    = 66;
+let TOK_MINUS_EQ   = 67;
+let TOK_STAR_EQ    = 68;
+let TOK_SLASH_EQ   = 69;
+let TOK_BAD_CHAR   = 70;
 let TOK_AT_GPU = 24;
 let TOK_AT_CPU = 25;
 let TOK_INT_LIT    = 26;
@@ -172,7 +177,20 @@ fn lx_skip_ws(Lexer lx) -> int64 {
         if (lx_peek(lx) == CH_SLASH && lx_peek2(lx) == CH_SLASH) {
             while (lx_peek(lx) != CH_NL && lx_peek(lx) != -1) { lx_advance(lx); }
         } else {
-            running = 0;
+            if (lx_peek(lx) == CH_SLASH && lx_peek2(lx) == CH_STAR) {
+                lx_advance(lx);
+                lx_advance(lx);
+                mut in_block = 1;
+                while (in_block && lx_peek(lx) != -1) {
+                    let bc = lx_advance(lx);
+                    if (bc == CH_STAR && lx_peek(lx) == CH_SLASH) {
+                        lx_advance(lx);
+                        in_block = 0;
+                    }
+                }
+            } else {
+                running = 0;
+            }
         }
     }
     return 0;
@@ -370,8 +388,14 @@ fn lex_global(string src) -> int64 {
                         } else {
                             lx_advance(lx);
                             mut kind = 0;
-                            if (c == CH_PLUS)     { kind = TOK_PLUS; }
-                            if (c == CH_STAR)     { kind = TOK_STAR; }
+                            if (c == CH_PLUS) {
+                                if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_PLUS_EQ; }
+                                else                       { kind = TOK_PLUS; }
+                            }
+                            if (c == CH_STAR) {
+                                if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_STAR_EQ; }
+                                else                       { kind = TOK_STAR; }
+                            }
                             if (c == CH_PERCENT)  { kind = TOK_PERCENT; }
                             if (c == CH_COMMA)    { kind = TOK_COMMA; }
                             if (c == CH_SEMI)     { kind = TOK_SEMI; }
@@ -387,10 +411,14 @@ fn lex_global(string src) -> int64 {
                                 else                        { kind = TOK_DOT; }
                             }
                             if (c == CH_MINUS) {
-                                if (lx_peek(lx) == CH_GT) { lx_advance(lx); kind = TOK_ARROW; }
-                                else                       { kind = TOK_MINUS; }
+                                if (lx_peek(lx) == CH_GT)  { lx_advance(lx); kind = TOK_ARROW; }
+                                else if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_MINUS_EQ; }
+                                else                        { kind = TOK_MINUS; }
                             }
-                            if (c == CH_SLASH) { kind = TOK_SLASH; }
+                            if (c == CH_SLASH) {
+                                if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_SLASH_EQ; }
+                                else                       { kind = TOK_SLASH; }
+                            }
                             if (c == CH_EQ) {
                                 if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_EQ_EQ; }
                                 else                       { kind = TOK_EQ; }
@@ -419,9 +447,13 @@ fn lex_global(string src) -> int64 {
                             }
                             if (c == CH_CARET) { kind = TOK_CARET; }
                             if (c == CH_TILDE) { kind = TOK_TILDE; }
+                            if (kind == 0) {
+                                kind = TOK_BAD_CHAR;
+                                println(str_concat("[error] ", str_concat(int64_to_str(tk_line), str_concat(":", str_concat(int64_to_str(tk_col), str_concat(": unrecognized character '", str_concat(char_to_str(c), "'")))))));
+                            }
                             push(g_tok_kinds, kind);
-                            push(g_tok_ivals, 0);
-                            push(g_tok_svals, "");
+                            push(g_tok_ivals, c);
+                            push(g_tok_svals, char_to_str(c));
                             push(g_tok_lines, tk_line);
                             push(g_tok_cols,  tk_col);
                         }
@@ -966,9 +998,26 @@ fn parse_lvalue(Parser p) -> int64 {
     return base;
 }
 
+fn is_compound_assign(int64 k) -> bool {
+    if (k == TOK_PLUS_EQ)  { return true; }
+    if (k == TOK_MINUS_EQ) { return true; }
+    if (k == TOK_STAR_EQ)  { return true; }
+    if (k == TOK_SLASH_EQ) { return true; }
+    return false;
+}
+
+fn compound_assign_op(int64 k) -> int64 {
+    if (k == TOK_PLUS_EQ)  { return OP_ADD; }
+    if (k == TOK_MINUS_EQ) { return OP_SUB; }
+    if (k == TOK_STAR_EQ)  { return OP_MUL; }
+    if (k == TOK_SLASH_EQ) { return OP_DIV; }
+    return 0;
+}
+
 fn is_assign_ahead(Parser p) -> bool {
     let k1 = p_peek_kind(p, 1);
     if (k1 == TOK_EQ) { return true; }
+    if (is_compound_assign(k1)) { return true; }
     if (k1 == TOK_DOT) {
         if (p_peek_kind(p, 3) == TOK_EQ) { return true; }
     }
@@ -1098,6 +1147,15 @@ fn parse_stmt_body(Parser p, int64 hw) -> int64 {
 
     if (k == TOK_IDENT && is_assign_ahead(p)) {
         let target = parse_lvalue(p);
+        let assign_tok = p_kind(p);
+        if (is_compound_assign(assign_tok)) {
+            let op = compound_assign_op(assign_tok);
+            p_advance(p);
+            let rhs = parse_expr(p);
+            p_expect(p, TOK_SEMI);
+            let expanded = new_node(ND_BINOP, "", op, target, rhs, 0);
+            return new_node(ND_ASSIGN, "", 0, target, expanded, 0);
+        }
         p_expect(p, TOK_EQ);
         let value = parse_expr(p);
         p_expect(p, TOK_SEMI);
@@ -1446,6 +1504,8 @@ fn fn_get_ret_ty(string name) -> int64 {
     }
     return TY_VOID;
 }
+
+fn fn_ret_ty(string name) -> int64 { return fn_get_ret_ty(name); }
 
 fn fn_get_ret_sv(string name) -> string {
     mut i = 1;

@@ -57,7 +57,21 @@ fn lx_skip_ws(Lexer lx) -> int64 {
         if (lx_peek(lx) == CH_SLASH && lx_peek2(lx) == CH_SLASH) {
             while (lx_peek(lx) != CH_NL && lx_peek(lx) != -1) { lx_advance(lx); }
         } else {
-            running = 0;
+            // Block comment /* ... */ — no nesting (Dragon Book longest-match rule)
+            if (lx_peek(lx) == CH_SLASH && lx_peek2(lx) == CH_STAR) {
+                lx_advance(lx);   // consume '/'
+                lx_advance(lx);   // consume '*'
+                mut in_block = 1;
+                while (in_block && lx_peek(lx) != -1) {
+                    let bc = lx_advance(lx);
+                    if (bc == CH_STAR && lx_peek(lx) == CH_SLASH) {
+                        lx_advance(lx);   // consume '/'
+                        in_block = 0;
+                    }
+                }
+            } else {
+                running = 0;
+            }
         }
     }
     return 0;
@@ -255,8 +269,14 @@ fn lex_global(string src) -> int64 {
                         } else {
                             lx_advance(lx);
                             mut kind = 0;
-                            if (c == CH_PLUS)     { kind = TOK_PLUS; }
-                            if (c == CH_STAR)     { kind = TOK_STAR; }
+                            if (c == CH_PLUS)  {
+                                if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_PLUS_EQ; }
+                                else                       { kind = TOK_PLUS; }
+                            }
+                            if (c == CH_STAR)  {
+                                if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_STAR_EQ; }
+                                else                       { kind = TOK_STAR; }
+                            }
                             if (c == CH_PERCENT)  { kind = TOK_PERCENT; }
                             if (c == CH_COMMA)    { kind = TOK_COMMA; }
                             if (c == CH_SEMI)     { kind = TOK_SEMI; }
@@ -272,10 +292,14 @@ fn lex_global(string src) -> int64 {
                                 else                        { kind = TOK_DOT; }
                             }
                             if (c == CH_MINUS) {
-                                if (lx_peek(lx) == CH_GT) { lx_advance(lx); kind = TOK_ARROW; }
-                                else                       { kind = TOK_MINUS; }
+                                if (lx_peek(lx) == CH_GT)  { lx_advance(lx); kind = TOK_ARROW; }
+                                else if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_MINUS_EQ; }
+                                else                        { kind = TOK_MINUS; }
                             }
-                            if (c == CH_SLASH) { kind = TOK_SLASH; }
+                            if (c == CH_SLASH) {
+                                if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_SLASH_EQ; }
+                                else                       { kind = TOK_SLASH; }
+                            }
                             if (c == CH_EQ) {
                                 if (lx_peek(lx) == CH_EQ) { lx_advance(lx); kind = TOK_EQ_EQ; }
                                 else                       { kind = TOK_EQ; }
@@ -304,9 +328,14 @@ fn lex_global(string src) -> int64 {
                             }
                             if (c == CH_CARET) { kind = TOK_CARET; }
                             if (c == CH_TILDE) { kind = TOK_TILDE; }
+                            // HW 1.3: unrecognized character → emit bad-char token and continue (panic-mode recovery)
+                            if (kind == 0) {
+                                kind = TOK_BAD_CHAR;
+                                print_span(tk_line, tk_col, str_concat("unrecognized character '", str_concat(char_to_str(c), "'")));
+                            }
                             push(g_tok_kinds, kind);
-                            push(g_tok_ivals, 0);
-                            push(g_tok_svals, "");
+                            push(g_tok_ivals, c);
+                            push(g_tok_svals, char_to_str(c));
                             push(g_tok_lines, tk_line);
                             push(g_tok_cols,  tk_col);
                         }

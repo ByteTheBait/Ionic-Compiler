@@ -473,9 +473,26 @@ fn parse_lvalue(Parser p) -> int64 {
     return base;
 }
 
+fn is_compound_assign(int64 k) -> bool {
+    if (k == TOK_PLUS_EQ)  { return true; }
+    if (k == TOK_MINUS_EQ) { return true; }
+    if (k == TOK_STAR_EQ)  { return true; }
+    if (k == TOK_SLASH_EQ) { return true; }
+    return false;
+}
+
+fn compound_assign_op(int64 k) -> int64 {
+    if (k == TOK_PLUS_EQ)  { return OP_ADD; }
+    if (k == TOK_MINUS_EQ) { return OP_SUB; }
+    if (k == TOK_STAR_EQ)  { return OP_MUL; }
+    if (k == TOK_SLASH_EQ) { return OP_DIV; }
+    return 0;
+}
+
 fn is_assign_ahead(Parser p) -> bool {
     let k1 = p_peek_kind(p, 1);
     if (k1 == TOK_EQ) { return true; }
+    if (is_compound_assign(k1)) { return true; }
     if (k1 == TOK_DOT) {
         if (p_peek_kind(p, 3) == TOK_EQ) { return true; }
     }
@@ -609,6 +626,16 @@ fn parse_stmt_body(Parser p, int64 hw) -> int64 {
 
     if (k == TOK_IDENT && is_assign_ahead(p)) {
         let target = parse_lvalue(p);
+        let assign_tok = p_kind(p);
+        if (is_compound_assign(assign_tok)) {
+            // Desugar: x += e  →  x = x + e
+            let op = compound_assign_op(assign_tok);
+            p_advance(p);
+            let rhs = parse_expr(p);
+            p_expect(p, TOK_SEMI);
+            let expanded = new_node(ND_BINOP, "", op, target, rhs, 0);
+            return new_node(ND_ASSIGN, "", 0, target, expanded, 0);
+        }
         p_expect(p, TOK_EQ);
         let value = parse_expr(p);
         p_expect(p, TOK_SEMI);

@@ -487,6 +487,28 @@ fn a64_fmul(int64 dd, int64 dn, int64 dm) -> int64 {
 fn a64_fdiv(int64 dd, int64 dn, int64 dm) -> int64 {
     return text_u32(0x1E601800 | (dm << 16) | (dn << 5) | dd);
 }
+fn a64_fmadd(int64 dd, int64 dn, int64 dm, int64 da) -> int64 {
+    return text_u32(0x1F400000 | (dm << 16) | (da << 10) | (dn << 5) | dd);
+}
+fn a64_fnmsub(int64 dd, int64 dn, int64 dm, int64 da) -> int64 {
+    return text_u32(0x1F608000 | (dm << 16) | (da << 10) | (dn << 5) | dd);
+}
+fn a64_lsl_imm(int64 rd, int64 rn, int64 imm) -> int64 {
+    let immr = 64 - imm;
+    let imms = 63 - imm;
+    return text_u32(0xD3400000 | (immr << 16) | (imms << 10) | (rn << 5) | rd);
+}
+fn is_pow2(int64 v) -> int64 {
+    if (v <= 1) { return -1; }
+    mut k = 0;
+    mut x = v;
+    while (x > 1) {
+        if ((x & 1) != 0) { return -1; }
+        x = x >> 1;
+        k = k + 1;
+    }
+    return k;
+}
 fn a64_fcmp(int64 dn, int64 dm) -> int64 {
     return text_u32(0x1E602000 | (dm << 16) | (dn << 5));
 }
@@ -821,6 +843,49 @@ fn ncg_expr(int64 node) -> int64 {
         let op  = nd_iv[node];
         let lhs = nd_i2[node];
         let rhs = nd_i3[node];
+
+        // ── Strength reduction: x * 2^k → LSL x, #k ─────────────────────
+        if (op == OP_MUL) {
+            let rk = nd_kind[rhs];
+            let lk = nd_kind[lhs];
+            if (rk == ND_INT) {
+                let k = is_pow2(nd_iv[rhs]);
+                if (k > 0) { let sr = ncg_expr(lhs); a64_lsl_imm(sr, sr, k); return sr; }
+            }
+            if (lk == ND_INT) {
+                let k = is_pow2(nd_iv[lhs]);
+                if (k > 0) { let sr = ncg_expr(rhs); a64_lsl_imm(sr, sr, k); return sr; }
+            }
+        }
+
+        // ── FMA fusion: a*b + c → FMADD,  a*b - c → FNMSUB ─────────────
+        if (op == OP_FADD) {
+            if (nd_kind[lhs] == ND_BINOP && nd_iv[lhs] == OP_FMUL) {
+                let fa = ncg_expr(nd_i2[lhs]);
+                let fb = ncg_expr(nd_i3[lhs]);
+                let fc = ncg_expr(rhs);
+                a64_fmadd(fa, fa, fb, fc);
+                text_u32(0x9E660000 | (fa << 5) | fa);
+                ncg_last_ty = 2; scratch_pop(); scratch_pop(); return fa;
+            }
+            if (nd_kind[rhs] == ND_BINOP && nd_iv[rhs] == OP_FMUL) {
+                let fc = ncg_expr(lhs);
+                let fa = ncg_expr(nd_i2[rhs]);
+                let fb = ncg_expr(nd_i3[rhs]);
+                a64_fmadd(fc, fa, fb, fc);
+                text_u32(0x9E660000 | (fc << 5) | fc);
+                ncg_last_ty = 2; scratch_pop(); scratch_pop(); return fc;
+            }
+        }
+        if (op == OP_FSUB && nd_kind[lhs] == ND_BINOP && nd_iv[lhs] == OP_FMUL) {
+            let fa = ncg_expr(nd_i2[lhs]);
+            let fb = ncg_expr(nd_i3[lhs]);
+            let fc = ncg_expr(rhs);
+            a64_fnmsub(fa, fa, fb, fc);
+            text_u32(0x9E660000 | (fa << 5) | fa);
+            ncg_last_ty = 2; scratch_pop(); scratch_pop(); return fa;
+        }
+
         let lr = ncg_expr(lhs);
         let rr = ncg_expr(rhs);
         let dr = lr;   // result in left reg
@@ -904,12 +969,14 @@ fn ncg_expr(int64 node) -> int64 {
 
         ncg_call(node);
 
-        // Restore spilled scratch registers
+        // Restore spilled scratch registers; also re-sync D regs from X regs because
+        // the callee may have clobbered D8-D15 (callee-saved in ABI but we don't save them).
         spill_i = 0;
         while (spill_i < live) {
             let sreg = REG_X9 + spill_i;
             let soff = (spill_base + 2 +spill_i) * 8;
             a64_load_fp(sreg, soff);
+            text_u32(0x9E670000 | (sreg << 5) | sreg);  // FMOV D{sreg}, X{sreg}
             spill_i = spill_i + 1;
         }
 
@@ -1307,6 +1374,11 @@ fn ncg_call(int64 node) -> int64 {
         str_eq(callee, "pow")            || str_eq(callee, "floor")         ||
         str_eq(callee, "ceil")           || str_eq(callee, "int64_to_float64")) {
         ncg_last_ty = 2;
+    }
+    if (ncg_last_ty == 0) {
+        let rty = fn_ret_ty(callee);
+        if (rty == 2) { ncg_last_ty = 2; }
+        if (rty == 4) { ncg_last_ty = 1; }
     }
     return 0;
 }
@@ -1710,9 +1782,10 @@ fn ncg_fn_node(int64 fn_node) -> int64 {
     while (param_node != 0) {
         let pn      = nd_i2[param_node];
         let param_name = nd_sv[pn];
-        let slot = local_def(param_name, 0);  // TODO detect float param
-        // If parameter type is a named struct, record it for field-access resolution.
         let param_ty = nd_i2[pn];   // type node of this param
+        mut is_flt_param = 0;
+        if (nd_kind[param_ty] == ND_TY_FLOAT64) { is_flt_param = 1; }
+        let slot = local_def(param_name, is_flt_param);
         if (nd_kind[param_ty] == ND_TY_NAMED) {
             local_set_stype(slot, nd_sv[param_ty]);
         }
