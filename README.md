@@ -40,6 +40,8 @@ fib(10) = 55
 - **Hardware-aware types** — `tensor@cpu` and `tensor@gpu` prevent accidental cross-device ops
 - **Real ML backends** — GGUF models via llama.cpp with Metal GPU; ONNX/CoreML; Piper TTS
 - **Human-readable errors** — multi-error reporting, source-line carets, column tracking, panic-mode recovery
+- **Optimizer** — a self-hosted optimization pipeline (fold, inline, unroll, const-propagate) that runs on every compilation before codegen
+- **Modern syntax** — compound assignment (`+=`, `-=`, `*=`, `/=`), block comments `/* ... */`, and panic-mode lexer recovery
 
 ---
 
@@ -143,6 +145,60 @@ println(float64_to_str(sqrt(2.0)));          // 1.41421
 println(float64_to_str(pow(pi, 2.0)));        // 9.8696
 println(float64_to_str(int64_to_float64(n))); // cast int→float
 ```
+
+### Compound assignment
+
+```ionic
+mut x = 10;
+x += 5;    // x = 15
+x -= 3;    // 12
+x *= 2;    // 24
+x /= 4;    // 6
+```
+
+### Block comments
+
+```ionic
+/* line one
+   line two */
+let y = 1 + 2;   // 3
+```
+
+---
+
+## Optimizations
+
+`src/opt/opt.ionic` is a self-hosted, single-pass optimizer that runs on every
+compilation between semantic checking and codegen. It rewrites the AST in place
+and always preserves the stable self-hosting fixed point — the compiler is able
+to optimize its own source.
+
+- **Constant folding + algebraic simplification + DCE** — folds integer ops on
+  constant operands (including comparisons and bitwise ops), simplifies
+  `x + 0`, `x * 1`, `x / 1`, `x | 0`, `x << 0`, folds unary neg/not/bitnot,
+  eliminates dead `if` branches on constant conditions and truncates unreachable
+  code after `return`.
+- **Float constant folding** — folds `+ - * /` on float (or int-promoted)
+  literals and the single-arg builtins `sqrt`, `fabs`, `floor`, `ceil`, plus
+  float negation, computing IEEE-754 bit patterns at compile time so the emitted
+  object contains no runtime float calls.
+- **Loop unrolling** — flattens `for` loops whose bounds are compile-time
+  integer constants and whose trip count is small (`≤ 8`), with no
+  `break`/`continue`, by deeply cloning the body per iteration and substituting
+  the induction variable with its literal index.
+- **Function inlining** — inlines "leaf" pure functions (a body that is exactly
+  a single `return <expr>` with no calls): parameters are substituted by the
+  optimized call-site arguments and the resulting expression is re-optimized.
+  Recursion and multi-statement functions are left intact.
+- **Scoped constant propagation (mem2reg subset)** — locally replaces references
+  to names declared `let x = <literal>` and never reassigned anywhere in the
+  function with their literal values, eliminating redundant store/loads so later
+  expressions can fold further.
+
+Combined, these passes work together — e.g. a constant `let` is propagated into
+arguments so a leaf call inlines, and the substituted body then folds; an
+inlined small loop body inside a constant-trip `for` is unrolled. Folding is
+always conservative, so optimization never changes program semantics.
 
 ---
 
