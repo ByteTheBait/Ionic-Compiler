@@ -29,17 +29,23 @@ jobs:
       - name: Install system deps
         run: brew install llvm
 
-      - name: Build compiler
+      # ── Rust cross-OS bootstrap ──────────────────────────────────────────
+      # `cargo build --release` produces target/release/ionic — a complete
+      # Rust/LLVM-based Ionic compiler that can build user programs on any
+      # OS with Rust + clang installed (Linux ARM64, macOS, Windows). This
+      # is the path used by future cross-OS CI; the committed ionic_self
+      # and ./build.sh handle the self-hosted compiler for now.
+      - name: Build Rust compiler
         run: cargo build --release
 
-      - name: Smoke test — hello world
+      - name: Smoke test — hello world (Rust compiler)
         run: |
           echo 'fn main() -> int64 { print("ok"); return 0; }' > /tmp/hi.ionic
           ./target/release/ionic /tmp/hi.ionic -o /tmp/hi
           output=$(/tmp/hi)
           [ "$output" = "ok" ] || (echo "Expected 'ok', got '$output'"; exit 1)
 
-      - name: Smoke test — arithmetic
+      - name: Smoke test — arithmetic (Rust compiler)
         run: |
           cat > /tmp/arith.ionic << 'EOF'
           fn main() -> int64 {
@@ -52,8 +58,40 @@ jobs:
           output=$(/tmp/arith)
           [ "$output" = "42" ] || (echo "Expected '42', got '$output'"; exit 1)
 
-      - name: Smoke test — standard library
+      - name: Smoke test — standard library (Rust compiler)
         run: |
           ./target/release/ionic examples/stdlib_test.ionic -o /tmp/stdlib_test
           /tmp/stdlib_test | grep -q "arr_sum = 100" || (echo "arr_sum check failed"; exit 1)
           /tmp/stdlib_test | grep -q "contains: ok"  || (echo "contains check failed"; exit 1)
+
+      # ── Self-hosted bootstrap ────────────────────────────────────────────
+      # Build ionic_new from the split .ionic sources using the committed
+      # ionic_self binary. This is the self-hosting path used by releases.
+      - name: Build self-hosted compiler
+        run: ./build.sh
+
+      - name: Smoke test — hello world (self-hosted compiler)
+        run: |
+          echo 'fn main() -> int64 { print("ok"); return 0; }' > /tmp/hi2.ionic
+          ./ionic_new /tmp/hi2.ionic -o /tmp/hi2
+          output=$(/tmp/hi2)
+          [ "$output" = "ok" ] || (echo "Expected 'ok', got '$output'"; exit 1)
+
+      - name: Smoke test — arithmetic (self-hosted compiler)
+        run: |
+          cat > /tmp/arith2.ionic << 'EOF'
+          fn main() -> int64 {
+              let x = 6 * 7;
+              print(int64_to_str(x));
+              return 0;
+          }
+          EOF
+          ./ionic_new /tmp/arith2.ionic -o /tmp/arith2
+          output=$(/tmp/arith2)
+          [ "$output" = "42" ] || (echo "Expected '42', got '$output'"; exit 1)
+
+      - name: Smoke test — standard library (self-hosted compiler)
+        run: |
+          ./ionic_new examples/stdlib_test.ionic -o /tmp/stdlib_test2
+          /tmp/stdlib_test2 | grep -q "arr_sum = 100" || (echo "arr_sum check failed"; exit 1)
+          /tmp/stdlib_test2 | grep -q "contains: ok"  || (echo "contains check failed"; exit 1)

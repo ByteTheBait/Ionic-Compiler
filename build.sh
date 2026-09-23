@@ -6,30 +6,29 @@
 #                                       (the committed bootstrap binary that
 #                                        ships with the repo). Works on any
 #                                        OS without any toolchain installed.
-#   ./build.sh --bootstrap-rust      — alternative path: cargo build --release,
-#                                       then use target/release/ionic to build
-#                                       ionic_new. This is the CI/Linux path:
-#                                       works from a clean checkout with only
-#                                       Rust stable + clang available, no need
-#                                       for the committed ionic_self binary.
-#   ./build.sh --verify-self-hosting — build ionic_new using the default path,
-#                                       then verify it rebuilds itself
-#                                       byte-for-byte (catches regressions in
-#                                       the self-hosted code path).
+#   ./build.sh --verify-self-hosting — build ionic_new, then verify it
+#                                       rebuilds itself byte-for-byte (catches
+#                                       regressions in the self-hosted code
+#                                       path). Exits 0 on match, 1 otherwise.
 #   IONIC=./some_binary ./build.sh   — use a specific Ionic binary instead of
 #                                       the default ./ionic_self
 #
 # End users install the released tarball (./ionic + lib/std). To rebuild from
-# source they just need ./ionic_self from the same tarball; no Rust toolchain
+# source they just need ./ionic_self from the same tarball; no toolchain
 # required.
 #
-# The Rust bootstrap is for development / cross-OS CI only.
+# The Rust source tree (src/*.rs + Cargo.toml) is for the dev-only Rust
+# compiler. It's used by CI as a cross-OS bootstrap — `cargo build --release`
+# produces target/release/ionic which can compile user programs on any OS
+# without needing the committed ionic_self. But target/release/ionic is
+# missing bitwise operator support (it predates that addition), so it
+# CANNOT compile the split .ionic sources themselves — use ionic_self for
+# that. End users don't need Rust or cargo; releases ship self-hosted.
 
 set -e
 
 IONIC="${IONIC:-./ionic_self}"
 OUT="${OUT:-ionic_new}"
-RUST_IONIC="${RUST_IONIC:-target/release/ionic}"
 
 SOURCES="
   src/lexer/tokens.ionic
@@ -45,33 +44,11 @@ SOURCES="
   src/main.ionic
 "
 
-# ── Mode: bootstrap via Rust ────────────────────────────────────────────────
-# The Rust compiler (cargo build --release) only accepts a single source file.
-# Concatenate the split sources into one big file, build via cargo, then use
-# the resulting compiler to produce ionic_new. Useful for fresh clones on
-# Linux ARM64 / Windows where the user doesn't have an ionic_self binary yet.
-if [ "$1" = "--bootstrap-rust" ]; then
-    echo "==> Bootstrapping via Cargo..."
-    cargo build --release
-
-    COMBINED="/tmp/_ionic_combined.ionic"
-    : > "$COMBINED"
-    for src in $SOURCES; do
-        cat "$src" >> "$COMBINED"
-        printf '\n' >> "$COMBINED"
-    done
-
-    echo "==> Compiling $OUT from concatenated split source..."
-    "$RUST_IONIC" "$COMBINED" -o "$OUT"
-    echo "==> Done: $OUT"
-    exit 0
-fi
-
 # ── Mode: build then verify self-hosting ────────────────────────────────────
 # First build ionic_new via whatever IONIC points at (default: ionic_self),
-# then run ionic_new to rebuild itself and compare to the first build.
-# Exits non-zero if the second build differs from the first — this catches
-# determinism bugs and self-hosting regressions in one shot.
+# then run ionic_new to rebuild itself into a temp file and `cmp -s` compare.
+# Exits non-zero if the second build differs — catches determinism bugs and
+# self-hosting regressions in one shot.
 if [ "$1" = "--verify-self-hosting" ]; then
     echo "==> Building $OUT from split source using $IONIC..."
     $IONIC $SOURCES -o "$OUT"
