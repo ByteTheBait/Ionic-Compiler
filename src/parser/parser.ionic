@@ -9,11 +9,9 @@ mut g_parse_error_msg   = "";
 
 fn parse_error(int64 line, string msg) -> int64 {
     g_parse_error_count = g_parse_error_count + 1;
-    if (g_parse_error == 0) {
-        g_parse_error = 1;
-        g_parse_error_msg = str_concat(int64_to_str(line), str_concat(":", str_concat(int64_to_str(g_cur_col), str_concat(": ", msg))));
-        print_span(line, g_cur_col, msg);
-    }
+    g_parse_error = 1;
+    g_parse_error_msg = str_concat(int64_to_str(line), str_concat(":", str_concat(int64_to_str(g_cur_col), str_concat(": ", msg))));
+    print_span(line, g_cur_col, msg);
     return 0;
 }
 
