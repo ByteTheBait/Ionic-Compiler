@@ -389,7 +389,7 @@ fn lev_is_close_enough(string bad, string candidate) -> int64 {
     }
     let lb = str_len(bad);
     let lc = str_len(candidate);
-    let max_len = lb;
+    mut max_len = lb;
     if (lc > max_len) { max_len = lc; }
     let limit = (max_len + 2) / 3;   // ceil(max_len / 3)
     if (d <= limit) { return 1; }
@@ -456,7 +456,7 @@ fn sc_hint_did_you_mean(string what, string suggestion) -> int64 {
     color_autodetect();
     let tag     = color_wrap(ANSI_BOLD_CYAN, "    help:");
     let sugg    = color_wrap(ANSI_BOLD_GREEN, str_concat("'", str_concat(suggestion, "'")));
-    let suffix  = color_wrap(ANSI_DIM, str_concat("(similar ", str_concat(str_concat(what, ")?"))));
+    let suffix  = color_wrap(ANSI_DIM, str_concat("(similar ", str_concat(what, ")?")));
     println(str_concat(str_concat(str_concat(tag, " did you mean "), sugg),
             str_concat(" ", suffix)));
     return 0;

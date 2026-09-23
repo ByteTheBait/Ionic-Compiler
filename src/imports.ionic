@@ -237,7 +237,7 @@ fn imp_resolve(string modpath) -> int64 {
     // Layer 3: built-in stdlib (only when first segment is "std")
     let first = imp_first_seg(modpath);
     // Compare first 3 bytes to "std" using numeric codes: s=115 t=116 d=100
-    let is_std = 0;
+    mut is_std = 0;
     if (str_len(first) == 3) {
         if (str_index(first, 0) == 115 &&
             str_index(first, 1) == 116 &&

@@ -97,7 +97,7 @@ mut g_editor_hint_shown = 0;
 
 fn print_editor_hint() -> int64 {
     if (g_editor_hint_shown == 1) { return 0; }
-    let editor = getenv("VISUAL");
+    mut editor = getenv("VISUAL");
     if (str_eq(editor, "")) { editor = getenv("EDITOR"); }
     if (str_eq(editor, "")) { return 0; }
     g_editor_hint_shown = 1;
@@ -107,7 +107,7 @@ fn print_editor_hint() -> int64 {
     let part1 = str_concat("    hint: re-run `", g_source_path);
     let part2 = str_concat(part1, "` in your editor (");
     let part3 = str_concat(part2, editor);
-    let part4 = str_concat(str_concat(part3, ") -- click path:line:col above to jump."));
+    let part4 = str_concat(part3, ") -- click path:line:col above to jump.");
     println(part4);
     return 0;
 }
