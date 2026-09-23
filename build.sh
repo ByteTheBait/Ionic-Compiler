@@ -19,6 +19,7 @@ SOURCES="
   src/semantic/checker.ionic
   src/opt/opt.ionic
   src/codegen/native.ionic
+  src/codegen/elf.ionic
   src/main.ionic
 "
 
