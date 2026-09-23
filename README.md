@@ -36,7 +36,9 @@ fib(10) = 55
 - **Static types, inferred where obvious** — `let x = 42` is `int64`; `let f = 3.14` is `float64`
 - **Full float64 support** — arithmetic, `sqrt`, `pow`, `floor`, `ceil`, `fabs`, `int64_to_float64`, `float64_to_str`
 - **Rich string builtins** — `format`, `str_concat`, `str_len`, `str_slice`, `str_replace`, `str_contains`, `str_starts_with`, `str_ends_with`, `int64_to_str`
-- **Arrays** — `[int64]` type, `.push`, `.len`, `arr_reset`, indexing and element assignment
+- **Arrays** — `[int64]`/`[float64]`/`[string]` types, `.push`, `.len`, `arr_reset`, indexing and element assignment; element types are tracked through the checker
+- **Import system** — `import std.math.*;` and selective `import std.str.{contains, trim};` pull in standard-library modules transitively with dedup
+- **Standard library** — `std.math`, `std.str`, `std.array`, `std.io` (and more) live under `lib/std/`
 - **Hardware-aware types** — `tensor@cpu` and `tensor@gpu` prevent accidental cross-device ops
 - **Real ML backends** — GGUF models via llama.cpp with Metal GPU; ONNX/CoreML; Piper TTS
 - **Human-readable errors** — multi-error reporting, source-line carets, column tracking, panic-mode recovery
@@ -164,6 +166,26 @@ x /= 4;    // 6
 let y = 1 + 2;   // 3
 ```
 
+### Imports & the standard library
+
+Import a whole module with a wildcard, or select specific symbols:
+
+```ionic
+import std.math.*;                      // everything in lib/std/math.ionic
+import std.str.{contains, trim};        // just those two functions
+import std.array.*;
+import std.io.*;
+```
+
+The import resolver (`src/imports.ionic`) loads the referenced module files from
+`lib/` during compilation, transitively expanding any imports inside them, and
+deduplicates so each module is included exactly once. Imported functions and
+constants become ordinary program declarations.
+
+Available std modules: `std.math` (constants + float helpers), `std.str`
+(string utils), `std.array` (array utils over `[int64]`/`[float64]`), and
+`std.io` (readline, eprint, print_hr).
+
 ---
 
 ## Optimizations
@@ -211,6 +233,7 @@ src/
   lexer/           Lexer — Ionic source
   semantic/        Type checker — Ionic source
   main.ionic       Compiler entry point
+  imports.ionic    Import resolver (loads std modules, transitive dedup)
   diagnostics.ionic  Error reporting
   compiler.ionic   Monolithic source (bootstrap only)
   codegen.ionic    Monolithic codegen (bootstrap only)

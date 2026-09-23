@@ -610,18 +610,13 @@ fn parse_stmt_body(Parser p, int64 hw) -> int64 {
         return new_node(ND_GPU_BLOCK, "", 0, body, 0, 0);
     }
 
+    // Parse an import statement: `import std.math;` | `import std.math.*;` |
+    // `import std.math.{a, b};`. Returns an ND_IMPORT_STMT node with:
+    //   sv = mode: "" (whole module), "*" (wildcard), "sel" (selective list)
+    //   i2 = dotted path parts list
+    //   i4 = selector name list (ND_IMPORT_STMT "sel" only; 0 otherwise)
     if (k == TOK_IMPORT) {
-        p_advance(p);
-        mut parts = [0];
-        mut np = 1;
-        push(parts, new_node(ND_STR, p_expect_ident(p), 0, 0, 0, 0));
-        while (p_kind(p) == TOK_DOT) {
-            p_advance(p);
-            push(parts, new_node(ND_STR, p_expect_ident(p), 0, 0, 0, 0));
-            np = np + 1;
-        }
-        p_expect(p, TOK_SEMI);
-        return new_node(ND_IMPORT_STMT, "", 0, build_list(parts, np), 0, 0);
+        return parse_import_stmt(p);
     }
 
     if (k == TOK_IDENT && is_assign_ahead(p)) {
@@ -698,6 +693,87 @@ fn parse_struct_def(Parser p) -> int64 {
     return new_node(ND_STRUCT_DEF, name, 0, build_list(fields, nf), 0, 0);
 }
 
+// Module path segments may be identifiers OR type keywords that the lexer maps
+// to dedicated token kinds (e.g. "array", "int64", "string", "model", "void").
+// This helper consumes a segment in either form and returns its source text.
+fn p_import_seg(Parser p) -> string {
+    if (g_parse_error != 0) { return ""; }
+    let k = p_kind(p);
+    if (k == TOK_IDENT) {
+        let s = p_sv(p);
+        p_advance(p);
+        return s;
+    }
+    // Type keywords usable as import path components (sv carries the source text).
+    if (k == TOK_KW_ARRAY   ||
+        k == TOK_KW_INT64   ||
+        k == TOK_KW_FLOAT64 ||
+        k == TOK_KW_BOOL    ||
+        k == TOK_KW_STRING  ||
+        k == TOK_KW_TENSOR  ||
+        k == TOK_KW_MODEL   ||
+        k == TOK_KW_VOID) {
+        let s = p_sv(p);
+        p_advance(p);
+        return s;
+    }
+    g_cur_col = p_col(p);
+    parse_error(p_line(p), "expected module name");
+    return "";
+}
+
+// Shared import-statement parser (used by both top-level and inner statement
+// positions). Accepts: `import std.math;`, `import std.math.*;`, and
+// `import std.math.{clamp, lerp};`.
+fn parse_import_stmt(Parser p) -> int64 {
+    if (g_parse_error != 0) { return 0; }
+    p_advance(p);  // consume 'import'
+    mut parts = [0];
+    mut np = 1;
+    push(parts, new_node(ND_STR, p_import_seg(p), 0, 0, 0, 0));
+    // Consume dotted path segments, but stop before `.*` or `.{`.
+    mut seg_done = 0;
+    while (seg_done == 0 && g_parse_error == 0) {
+        if (p_kind(p) == TOK_DOT) {
+            // A '.' followed by '*' or '{' begins the selector, not a path segment.
+            let nxt = p_peek_kind(p, 1);
+            if (nxt == TOK_STAR || nxt == TOK_LBRACE) {
+                seg_done = 1;
+            } else {
+                p_advance(p);
+                push(parts, new_node(ND_STR, p_import_seg(p), 0, 0, 0, 0));
+                np = np + 1;
+            }
+        } else {
+            seg_done = 1;
+        }
+    }
+    mut mode = "";
+    mut sel_list = 0;
+    if (p_kind(p) == TOK_DOT) {
+        p_advance(p);  // consume '.'
+        if (p_kind(p) == TOK_STAR) {
+            p_advance(p);
+            mode = "*";
+        } else if (p_kind(p) == TOK_LBRACE) {
+            p_advance(p);
+            mut sels = [0];
+            mut ns = 0;
+            while (p_kind(p) != TOK_RBRACE && p_kind(p) != TOK_EOF && g_parse_error == 0) {
+                push(sels, new_node(ND_STR, p_expect_ident(p), 0, 0, 0, 0));
+                ns = ns + 1;
+                if (p_kind(p) == TOK_COMMA) { p_advance(p); }
+            }
+            p_expect(p, TOK_RBRACE);
+            mode = "sel";
+            sel_list = build_list(sels, ns);
+        }
+        // If neither '*' nor '{' follows, the following p_expect(SEMI) will error.
+    }
+    p_expect(p, TOK_SEMI);
+    return new_node(ND_IMPORT_STMT, mode, 0, build_list(parts, np), 0, sel_list);
+}
+
 fn parse_program(Parser p) -> [int64] {
     mut import_arr = [0]; mut ni = 0;
     mut struct_arr = [0]; mut ns = 0;
@@ -709,17 +785,7 @@ fn parse_program(Parser p) -> [int64] {
         let k  = p_kind(p);
 
         if (k == TOK_IMPORT) {
-            p_advance(p);
-            mut parts = [0];
-            mut np = 1;
-            push(parts, new_node(ND_STR, p_expect_ident(p), 0, 0, 0, 0));
-            while (p_kind(p) == TOK_DOT) {
-                p_advance(p);
-                push(parts, new_node(ND_STR, p_expect_ident(p), 0, 0, 0, 0));
-                np = np + 1;
-            }
-            p_expect(p, TOK_SEMI);
-            push(import_arr, new_node(ND_IMPORT_STMT, "", 0, build_list(parts, np), 0, 0));
+            push(import_arr, parse_import_stmt(p));
             ni = ni + 1;
         } else {
             if (k == TOK_STRUCT) {

@@ -1,0 +1,197 @@
+// ── Import resolution ────────────────────────────────────────────────────────
+// Resolves `import` statements at compile time by loading standard-library
+// module sources and splicing them into the user program.
+//
+// Strategy (whole-module include with transitive dedup):
+//   1. Scan source text line-by-line for `import <path>;` lines.
+//   2. For each, load the referenced module file from lib/ (recursively
+//      expanding any imports inside it), marking each module as loaded.
+//   3. Remove import lines from the accumulated source so they don't reach
+//      the parser (the checker/codegen treat ND_IMPORT_STMT as a no-op).
+//
+// The result is one combined source = user code (imports stripped) + all
+// transitively imported module sources. Modules are spliced in dependency
+// order so declarations are available before their dependents are parsed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Accumulated source fragments (dependency order). [0] is a sentinel.
+mut g_parts    = [""];
+mut g_part_cnt = 0;
+
+// Modules already loaded, keyed by dotted path (dedup markers). [0] sentinel.
+mut g_mod_paths = [""];
+mut g_mod_count = 0;
+
+fn imp_mod_loaded(string path) -> int64 {
+    mut i = 1;
+    while (i <= g_mod_count) {
+        if (str_eq(g_mod_paths[i], path)) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn imp_mod_mark(string path) -> int64 {
+    g_mod_count = g_mod_count + 1;
+    if (g_mod_count < len(g_mod_paths)) { g_mod_paths[g_mod_count] = path; }
+    else { push(g_mod_paths, path); }
+    return 0;
+}
+
+// Does `src` contain `prefix` verbatim at byte offset `start`?
+fn imp_starts_at(string src, string prefix, int64 start) -> int64 {
+    let plen = str_len(prefix);
+    if (str_len(src) < start + plen) { return 0; }
+    mut i = 0;
+    while (i < plen) {
+        if (str_index(src, start + i) != str_index(prefix, i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Return the byte offset just past an identifier run [A-Za-z0-9_] starting at pos.
+fn imp_span_ident(string s, int64 pos) -> int64 {
+    let n = str_len(s);
+    mut i = pos;
+    while (i < n) {
+        let c = str_index(s, i);
+        mut isc = 0;
+        if (c >= 48 && c <= 57)  { isc = 1; }
+        if (c >= 65 && c <= 90)  { isc = 1; }
+        if (c >= 97 && c <= 122) { isc = 1; }
+        if (c == 95)             { isc = 1; }
+        if (isc == 0) { return i; }
+        i = i + 1;
+    }
+    return i;
+}
+
+// Return the byte offset just past leading spaces/tabs starting at pos.
+fn imp_skip_space(string s, int64 pos) -> int64 {
+    let n = str_len(s);
+    mut i = pos;
+    while (i < n) {
+        let c = str_index(s, i);
+        if (c != 32 && c != 9) { return i; }
+        i = i + 1;
+    }
+    return i;
+}
+
+// Return the byte offset of the next newline starting at pos (or end).
+fn imp_next_nl(string s, int64 pos) -> int64 {
+    let n = str_len(s);
+    mut i = pos;
+    while (i < n) {
+        if (str_index(s, i) == CH_NL) { return i; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// Convert a dotted module path to a lib file path.
+//   "std.math"      -> "lib/std/math.ionic"
+//   "std.data.csv"  -> "lib/std/data/csv.ionic"
+fn imp_modpath_to_file(string mp) -> string {
+    let n = str_len(mp);
+    mut lastdot = -1;
+    mut i = 0;
+    while (i < n) {
+        if (str_index(mp, i) == CH_DOT) { lastdot = i; }
+        i = i + 1;
+    }
+    mut dir = "lib";
+    mut name = mp;
+    if (lastdot >= 0) {
+        dir = str_concat("lib/", str_slice(mp, 0, lastdot));
+        name = str_slice(mp, lastdot + 1, n);
+    }
+    return str_concat(str_concat(str_concat(dir, "/"), name), ".ionic");
+}
+
+// Append one source fragment to the accumulated output (if non-empty).
+fn imp_emit(string frag) -> int64 {
+    if (str_len(frag) > 0) {
+        g_part_cnt = g_part_cnt + 1;
+        if (g_part_cnt < len(g_parts)) { g_parts[g_part_cnt] = frag; }
+        else { push(g_parts, frag); }
+    }
+    return 0;
+}
+
+// Expand source, splicing in imports and stripping import lines.
+fn imp_expand(string src) -> int64 {
+    let n = str_len(src);
+    mut acc = "";
+    mut pos = 0;
+    while (pos < n) {
+        let nl = imp_next_nl(src, pos);
+        let s0 = imp_skip_space(src, pos);
+        mut is_imp = 0;
+        if (s0 < nl) {
+            if (imp_starts_at(src, "import", s0)) {
+                // require a word boundary after 'import'
+                let after = s0 + 6;
+                if (after < n) {
+                    let c = str_index(src, after);
+                    if (c == 32 || c == 9) { is_imp = 1; }
+                }
+            }
+        }
+        if (is_imp == 1) {
+            // Parse dotted module path: after 'import', read ident ('.' ident)*
+            mut p = imp_skip_space(src, s0 + 6);
+            let e1 = imp_span_ident(src, p);
+            mut modpath = str_slice(src, p, e1);
+            p = e1;
+            mut done_p = 0;
+            while (done_p == 0 && p < nl) {
+                if (p + 1 < n && str_index(src, p) == CH_DOT) {
+                    let estart = p + 1;
+                    let eend = imp_span_ident(src, estart);
+                    if (eend > estart) {
+                        modpath = str_concat(modpath, str_concat(".", str_slice(src, estart, eend)));
+                        p = eend;
+                    } else {
+                        // '.' followed by '*' or '{' or ';' — stop path.
+                        done_p = 1;
+                    }
+                } else {
+                    done_p = 1;
+                }
+            }
+            imp_resolve(modpath);
+        } else {
+            // Copy the line (with its newline) into the accumulator.
+            acc = str_concat(acc, str_concat(str_slice(src, pos, nl), "\n"));
+        }
+        pos = nl + 1;
+    }
+    imp_emit(acc);
+    return 0;
+}
+
+// Load a module by dotted path (idempotent), recursing into its imports.
+fn imp_resolve(string modpath) -> int64 {
+    if (imp_mod_loaded(modpath)) { return 0; }
+    imp_mod_mark(modpath);
+    let file = imp_modpath_to_file(modpath);
+    let content = file_read(file);
+    if (str_len(content) == 0) {
+        println(str_concat("ionic: cannot open module '", str_concat(modpath,
+                str_concat("' (", str_concat(file, ")")))));
+        return 0;
+    }
+    imp_expand(content);
+    return 0;
+}
+
+// Reset import resolver state for a fresh invocation (used once per compile).
+fn imp_reset() -> int64 {
+    g_parts    = [""];
+    g_part_cnt = 0;
+    g_mod_paths = [""];
+    g_mod_count = 0;
+    return 0;
+}

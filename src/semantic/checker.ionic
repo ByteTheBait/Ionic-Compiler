@@ -80,6 +80,62 @@ fn node_ty_sv(int64 ty_node) -> string {
     return "";
 }
 
+// Return the element type of a `[...]` array type annotation node, or
+// TY_UNKNOWN if ty_node is not an array type.
+fn node_ty_elem_int(int64 ty_node) -> int64 {
+    if (nd_kind[ty_node] != ND_TY_ARRAY) { return TY_UNKNOWN; }
+    let inner = nd_i2[ty_node];
+    if (inner == 0) { return TY_UNKNOWN; }
+    return node_ty_to_int(inner);
+}
+
+// Encode an array element type as its sv-string form ("" means unknown).
+fn elem_sv(int64 e) -> string {
+    if (e == TY_UNKNOWN || e == TY_ARRAY || e == TY_STRUCT) { return ""; }
+    return int64_to_str(e);
+}
+
+// Decode an array element type from its sv-string form ("" means unknown).
+fn elem_from_sv(string sv) -> int64 {
+    if (str_len(sv) == 0) { return TY_UNKNOWN; }
+    let v = str_to_int64(sv);
+    if (v == TY_INT64)   { return TY_INT64; }
+    if (v == TY_FLOAT64) { return TY_FLOAT64; }
+    if (v == TY_STR)     { return TY_STR; }
+    if (v == TY_BOOL)    { return TY_BOOL; }
+    // TY_VOID/TY_ARRAY as element types are not supported; treat as unknown.
+    return TY_UNKNOWN;
+}
+
+// For an array type annotation node, produce the element-type sv-string.
+fn node_ty_arr_elem_sv(int64 ty_node) -> string {
+    if (nd_kind[ty_node] != ND_TY_ARRAY) { return ""; }
+    return elem_sv(node_ty_elem_int(ty_node));
+}
+
+// The "sv value" of a type annotation used for declarations:
+//   struct → struct name, array → element-type sv, otherwise "".
+fn node_ty_val_sv(int64 ty_node) -> string {
+    if (ty_node == 0) { return ""; }
+    if (nd_kind[ty_node] == ND_TY_NAMED) { return nd_sv[ty_node]; }
+    return node_ty_arr_elem_sv(ty_node);
+}
+
+// Element type (TY_*) of an array-literal AST node, by inspecting the first
+// element's node kind. Used by the top-level globals pre-pass where
+// sc_expr/sc_elem_ty are not yet available.
+fn array_lit_elem_ty(int64 lit) -> int64 {
+    let e = nd_i2[lit];
+    if (e == 0) { return TY_UNKNOWN; }
+    let en = nd_i2[e];
+    if (en == 0) { return TY_UNKNOWN; }
+    let k = nd_kind[en];
+    if (k == ND_INT || k == ND_BOOL) { return TY_INT64; }
+    if (k == ND_FLOAT)               { return TY_FLOAT64; }
+    if (k == ND_STR)                 { return TY_STR; }
+    return TY_UNKNOWN;
+}
+
 // types are compatible if they are equal or either is unknown
 fn ty_compat(int64 got, int64 want) -> bool {
     if (want == TY_UNKNOWN || got == TY_UNKNOWN) { return true; }
@@ -370,7 +426,7 @@ fn register_fn_node(int64 node) -> int64 {
     while (pnode != 0) {
         let param = nd_i2[pnode];
         let pty   = node_ty_to_int(nd_i2[param]);
-        let ptsv  = node_ty_sv(nd_i2[param]);
+        let ptsv  = node_ty_val_sv(nd_i2[param]);
         fp_count = fp_count + 1;
         if (fp_count < len(fp_tys)) { fp_tys[fp_count] = pty; fp_svs[fp_count] = ptsv; }
         else { push(fp_tys, pty); push(fp_svs, ptsv); }
@@ -700,7 +756,7 @@ fn sc_expr(int64 node) -> int64 {
             sc_ty = TY_INT64; sc_sv = ""; return 0;
         }
         if (obj_ty == TY_ARRAY) {
-            sc_ty = TY_UNKNOWN; sc_sv = ""; return 0;
+            sc_ty = elem_from_sv(obj_sv); sc_sv = ""; return 0;
         }
         if (obj_ty != TY_UNKNOWN) {
             sc_error_at("index operator", str_concat("cannot index into ", ty_name(obj_ty, obj_sv)));
@@ -721,7 +777,7 @@ fn sc_expr(int64 node) -> int64 {
             enode = nd_i3[enode];
         }
         sc_elem_ty = elem_ty;
-        sc_ty = TY_ARRAY; sc_sv = ""; return 0;
+        sc_ty = TY_ARRAY; sc_sv = elem_sv(elem_ty); return 0;
     }
 
     // ── Struct literal ────────────────────────────────────────────────────────
@@ -806,7 +862,7 @@ fn sc_stmt(int64 node) -> int64 {
         mut decl_sv_val = init_sv_val;
         if (ty_ann != 0) {
             let ann_ty = node_ty_to_int(ty_ann);
-            let ann_sv_val = node_ty_sv(ty_ann);
+            let ann_sv_val = node_ty_val_sv(ty_ann);
             if (!ty_compat(init_ty, ann_ty) && init_ty != TY_UNKNOWN) {
                 sc_error_at(str_concat("declaration of '", str_concat(name, "'")),
                     str_concat(str_concat("annotation says ", ty_name(ann_ty, ann_sv_val)),
@@ -973,7 +1029,7 @@ fn sc_fn(int64 fn_node) -> int64 {
         let param = nd_i2[pnode];
         let pname = nd_sv[param];
         let pty   = node_ty_to_int(nd_i2[param]);
-        let ptsv  = node_ty_sv(nd_i2[param]);
+        let ptsv  = node_ty_val_sv(nd_i2[param]);
         sv_declare(pname, pty, ptsv, 0);
         pnode = nd_i3[pnode];
     }
@@ -1005,13 +1061,13 @@ fn sc_program(int64 structs_list, int64 fns_list, int64 top_list) -> int64 {
             mut decl_sv_val = "";
             if (ty_ann != 0) {
                 decl_ty = node_ty_to_int(ty_ann);
-                decl_sv_val = node_ty_sv(ty_ann);
+                decl_sv_val = node_ty_val_sv(ty_ann);
             } else {
                 let ik = nd_kind[init_nd];
                 if (ik == ND_INT || ik == ND_BOOL)   { decl_ty = TY_INT64; }
                 if (ik == ND_FLOAT)                  { decl_ty = TY_FLOAT64; }
                 if (ik == ND_STR)                    { decl_ty = TY_STR; }
-                if (ik == ND_ARRAY_LIT)              { decl_ty = TY_ARRAY; }
+                if (ik == ND_ARRAY_LIT)              { decl_ty = TY_ARRAY; decl_sv_val = elem_sv(array_lit_elem_ty(init_nd)); }
                 if (ik == ND_STRUCT_LIT)             { decl_ty = TY_STRUCT; decl_sv_val = nd_sv[init_nd]; }
             }
             sv_declare(gname, decl_ty, decl_sv_val, mut_flag);

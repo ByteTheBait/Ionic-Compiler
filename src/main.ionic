@@ -16,6 +16,18 @@ while (!str_eq(cur_arg, "")) {
     cur_arg = get_arg(ai);
 }
 
+// Expand `import` statements: splice in transitively imported library modules
+// and strip the import lines. g_parts holds fragments in dependency order.
+imp_reset();
+imp_expand(src_str);
+mut combined = "";
+mut pi = 1;
+while (pi <= g_part_cnt) {
+    combined = str_concat(combined, str_concat(g_parts[pi], "\n"));
+    pi = pi + 1;
+}
+src_str = combined;
+
 g_source = src_str;
 
 let ntoks = lex_global(src_str);
