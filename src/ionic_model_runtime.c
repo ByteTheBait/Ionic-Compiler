@@ -124,6 +124,15 @@ const char *ionic_get_arg(int64_t n) {
     return ionic_argv[idx];
 }
 
+/* Read an environment variable. Returns empty string (not NULL) when unset.
+ * Used by the import resolver to locate the per-user package cache
+ * (~/.ionic/packages on Unix; falls back to USERPROFILE on Windows). */
+const char *ionic_getenv(const char *name) {
+    if (!name) return "";
+    const char *v = getenv(name);
+    return v ? v : "";
+}
+
 int64_t ionic_target_is_linux(void) {
 #ifdef __linux__
     return 1;

@@ -1294,7 +1294,7 @@ fn ncg_call(int64 node) -> int64 {
                 str_eq(inner, "str_slice")    || str_eq(inner, "read_line")      ||
                 str_eq(inner, "http_get")    || str_eq(inner, "http_post")      ||
                 str_eq(inner, "http_body")   || str_eq(inner, "http_urlencode") ||
-                str_eq(inner, "str_hash_to_str")) {
+                str_eq(inner, "getenv")      || str_eq(inner, "str_hash_to_str")) {
                 ncg_last_ty = 1;
             }
         }
@@ -1339,6 +1339,7 @@ fn ncg_call(int64 node) -> int64 {
     if (str_eq(callee, "cpu_core_count"))    { real_callee = "ionic_cpu_core_count"; }
     if (str_eq(callee, "target_is_linux"))   { real_callee = "ionic_target_is_linux"; }
     if (str_eq(callee, "exit"))              { real_callee = "ionic_exit"; }
+    if (str_eq(callee, "getenv"))            { real_callee = "ionic_getenv"; }
     if (str_eq(callee, "read_line"))         { real_callee = "ionic_read_line"; }
     if (str_eq(callee, "str_slice"))         { real_callee = "ionic_str_slice"; }
     if (str_eq(callee, "str_contains"))      { real_callee = "ionic_str_contains"; }
@@ -1387,7 +1388,8 @@ fn ncg_call(int64 node) -> int64 {
         str_eq(callee, "str_slice")      || str_eq(callee, "read_line")    ||
         str_eq(callee, "str_replace")    || str_eq(callee, "format")         ||
         str_eq(callee, "http_get")       || str_eq(callee, "http_post")      ||
-        str_eq(callee, "http_body")      || str_eq(callee, "http_urlencode")) {
+        str_eq(callee, "http_body")      || str_eq(callee, "http_urlencode") ||
+        str_eq(callee, "getenv")) {
         ncg_last_ty = 1;
     }
     if (str_eq(callee, "sqrt")           || str_eq(callee, "fabs")          ||

@@ -498,6 +498,7 @@ fn register_builtins() -> int64 {
     register_builtin("cpu_core_count",    0, TY_INT64,   "");
     register_builtin("target_is_linux",   0, TY_INT64,   "");
     register_builtin("exit",              1, TY_VOID,    "");
+    register_builtin("getenv",            1, TY_STR,     "");
     register_builtin("str_to_int64",      1, TY_INT64,   "");
     register_builtin("read_line",         0, TY_STR,     "");
     register_builtin("str_slice",         3, TY_STR,     "");
