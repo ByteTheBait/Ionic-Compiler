@@ -855,3 +855,217 @@ void ionic_write_wav(const char *path, void *samples_arr,
     fprintf(stderr, "[ionic] WAV: %s (%lld samples @ %lld Hz)\n",
             path, (long long)n, (long long)sample_rate);
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * Web request primitives
+ *
+ * A minimal dependency-free HTTP/1.1 client over POSIX sockets. Only the
+ * blocking HTTP(S-free) path is implemented here; HTTPS would require TLS
+ * (a separate dependency) and is stubbed to return an empty body.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <netinet/in.h>
+#  include <arpa/inet.h>
+#  include <netdb.h>
+#  include <errno.h>
+#endif
+
+/*
+ * Split a URL into host and port.
+ *   "http://host:port/path"  -> host, port, rest (path)
+ *   "https://host/..."       -> returns 0 (unsupported)
+ */
+static void url_parse(const char *url, char *host, int host_sz,
+                      int *port, const char **path) {
+    const char *h = url;
+    *port = 80;
+    *path = "/";
+
+    if (strncmp(h, "http://", 7) == 0) { h += 7; }
+    else if (strncmp(h, "https://", 8) == 0) {
+        // TLS not implemented — mark port as unsupported by using -1
+        *port = -1;
+        h += 8;
+    }
+
+    /* host:port/path */
+    const char *colon = strchr(h, ':');
+    const char *slash = strchr(h, '/');
+    const char *end = colon;
+    if (end == NULL || (slash && slash < end)) end = slash;
+    if (end == NULL) end = h + strlen(h);
+
+    size_t hlen = (size_t)(end - h);
+    if (hlen >= (size_t)host_sz) hlen = (size_t)(host_sz - 1);
+    memcpy(host, h, hlen);
+    host[hlen] = '\0';
+
+    if (colon && (*colon == ':')) {
+        *port = atoi(colon + 1);
+        const char *p2 = strchr(colon + 1, '/');
+        if (p2) *path = p2; else *path = "/";
+    } else if (slash) {
+        *path = slash;
+    }
+}
+
+static void http_write_all(int sock, const char *buf, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = send(sock, buf + off, n - off, 0);
+        if (w <= 0) return;
+        off += (size_t)w;
+    }
+}
+
+/* Perform a request; returns malloc'd body (or "" on failure). */
+static char *http_request(const char *method, const char *url,
+                          const char *headers, const char *body) {
+    char host[256];
+    int  port = 80;
+    const char *path = "/";
+    url_parse(url, host, sizeof(host), &port, &path);
+    if (port < 0) {
+        fprintf(stderr, "[ionic/http] https not supported (no TLS): %s\n", url);
+        char *e = (char *)malloc(1); e[0] = '\0'; return e;
+    }
+
+#ifdef _WIN32
+    WSADATA ws; (void)ws;
+#else
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) { fprintf(stderr, "[ionic/http] socket: %s\n", strerror(errno)); return NULL; }
+
+    struct hostent *he = gethostbyname(host);
+    if (!he) { fprintf(stderr, "[ionic/http] lookup failed: %s\n", host); close(sock); return NULL; }
+
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port   = htons((uint16_t)port);
+    memcpy(&sa.sin_addr, he->h_addr_list[0], he->h_length);
+
+    if (connect(sock, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        fprintf(stderr, "[ionic/http] connect: %s\n", strerror(errno));
+        close(sock);
+        return NULL;
+    }
+
+    /* Build request line + headers */
+    char req[4096];
+    {
+        int n = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\n",
+                         method, path, host);
+        if (n < 0) n = 0;
+        if (n >= 0) {
+            if (headers) {
+                size_t hl = strlen(headers);
+                if (n + (int)hl < (int)sizeof(req)) {
+                    memcpy(req + n, headers, hl);
+                    n += (int)hl;
+                }
+            }
+            if (body) {
+                char cl[64];
+                snprintf(cl, sizeof(cl), "Content-Length: %lld\r\n", (long long)strlen(body));
+                size_t cll = strlen(cl);
+                if (n + (int)cll < (int)sizeof(req)) {
+                    memcpy(req + n, cl, cll);
+                    n += (int)cll;
+                }
+            }
+            /* Ask the server to close after the response so we can read to EOF. */
+            const char *closehdr = "Connection: close\r\n";
+            size_t chl = strlen(closehdr);
+            if (n + (int)chl < (int)sizeof(req)) {
+                memcpy(req + n, closehdr, chl);
+                n += (int)chl;
+            }
+            if (n + 2 < (int)sizeof(req)) {
+                memcpy(req + n, "\r\n", 2); n += 2;
+            }
+            http_write_all(sock, req, n);
+            if (body) http_write_all(sock, body, strlen(body));
+        }
+    }
+
+    /* Read the full response into a growing buffer.
+     * Return the ENTIRE raw response (status line + headers + body) so that
+     * ionic_http_status / ionic_http_body can parse it. */
+    size_t cap = 8192, len = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { close(sock); return NULL; }
+    char tmp[4096];
+    for (;;) {
+        ssize_t r = recv(sock, tmp, sizeof(tmp), 0);
+        if (r <= 0) break;
+        if (len + (size_t)r + 1 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(buf, cap);
+            if (!nb) break;
+            buf = nb;
+        }
+        memcpy(buf + len, tmp, (size_t)r);
+        len += (size_t)r;
+    }
+    buf[len] = '\0';
+    close(sock);
+    return buf;
+#endif
+}
+
+char *ionic_http_get(const char *url) {
+    char *b = http_request("GET", url, "", NULL);
+    return b ? b : ((char *)"");
+}
+
+char *ionic_http_post(const char *url, const char *body) {
+    char *b = http_request("POST", url, "Content-Type: application/json\r\n", body);
+    return b ? b : ((char *)"");
+}
+
+/*
+ * Return the HTTP status code from a full raw response. Callers that want the
+ * code call this on the raw response string (not the body).
+ */
+int64_t ionic_http_status(const char *raw) {
+    if (strncmp(raw, "HTTP/", 5) != 0) return -1;
+    const char *sp = strchr(raw, ' ');
+    if (!sp) return -1;
+    return atoi(sp + 1);
+}
+
+/* Split a full HTTP response into headers and body. Returns the body. */
+char *ionic_http_body(const char *raw) {
+    const char *sep = strstr(raw, "\r\n\r\n");
+    if (!sep) return (char *)(raw ? raw : "");
+    char *b = (char *)malloc(strlen(sep + 4) + 1);
+    strcpy(b, sep + 4);
+    return b;
+}
+
+/* URL-encode a string (percent-encoding). */
+char *ionic_http_urlencode(const char *s) {
+    if (!s) s = "";
+    char *out = (char *)malloc(strlen(s) * 3 + 1);
+    char *p = out;
+    static const char hex[] = "0123456789ABCDEF";
+    for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
+        unsigned char ch = *c;
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' ||
+            ch == '.' || ch == '~') {
+            *p++ = (char)ch;
+        } else {
+            *p++ = '%'; *p++ = hex[(ch >> 4) & 0xF]; *p++ = hex[ch & 0xF];
+        }
+    }
+    *p = '\0';
+    return out;
+}

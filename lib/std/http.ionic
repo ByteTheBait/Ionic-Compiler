@@ -1,0 +1,38 @@
+/// HTTP client primitives (built-in web request functions).
+/// Import: `import std.http.*;`
+///
+/// The built-ins below map to the C runtime's minimal HTTP/1.1 client
+/// (raw sockets, no TLS). `get`/`post` return the *entire* raw response
+/// (status line + headers + body); use `status` / `body` on that result.
+///
+///   let raw = get("http://host/path");
+///   if (status(raw) == 200) {
+///       let text = body(raw);
+///       ...
+///   }
+
+/// Performs an HTTP GET and returns the full raw response string.
+fn get(string url) -> string {
+    return http_get(url);
+}
+
+/// Performs an HTTP POST with a JSON body and returns the full raw response.
+fn post(string url, string json_body) -> string {
+    return http_post(url, json_body);
+}
+
+/// Extracts the numeric HTTP status code from a raw response string.
+fn status(string raw) -> int64 {
+    return http_status(raw);
+}
+
+/// Extracts just the body (everything after the header/body separator)
+/// from a raw response string.
+fn body(string raw) -> string {
+    return http_body(raw);
+}
+
+/// Percent-encodes a string for use in a URL query or path segment.
+fn urlencode(string s) -> string {
+    return http_urlencode(s);
+}

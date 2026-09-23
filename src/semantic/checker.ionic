@@ -522,6 +522,12 @@ fn register_builtins() -> int64 {
     register_builtin("ceil_bits",         1, TY_INT64,   "");
     register_builtin("int_to_fbits",      1, TY_INT64,   "");
     register_builtin("format",           -1, TY_STR,     "");
+    // Web request primitives
+    register_builtin("http_get",         1, TY_STR,     "");
+    register_builtin("http_post",        2, TY_STR,     "");
+    register_builtin("http_status",      1, TY_INT64,   "");
+    register_builtin("http_body",        1, TY_STR,     "");
+    register_builtin("http_urlencode",   1, TY_STR,     "");
     // ML / model inference
     register_builtin("load_model",        1, TY_MODEL_CPU,"");
     register_builtin("model_free",        1, TY_VOID,    "");

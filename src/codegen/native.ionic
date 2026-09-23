@@ -1292,6 +1292,8 @@ fn ncg_call(int64 node) -> int64 {
                 str_eq(inner, "get_arg")      || str_eq(inner, "file_read")      ||
                 str_eq(inner, "format")       || str_eq(inner, "str_replace")    ||
                 str_eq(inner, "str_slice")    || str_eq(inner, "read_line")      ||
+                str_eq(inner, "http_get")    || str_eq(inner, "http_post")      ||
+                str_eq(inner, "http_body")   || str_eq(inner, "http_urlencode") ||
                 str_eq(inner, "str_hash_to_str")) {
                 ncg_last_ty = 1;
             }
@@ -1344,6 +1346,11 @@ fn ncg_call(int64 node) -> int64 {
     if (str_eq(callee, "str_ends_with"))     { real_callee = "ionic_str_ends_with"; }
     if (str_eq(callee, "str_replace"))       { real_callee = "ionic_str_replace"; }
     if (str_eq(callee, "format"))            { real_callee = "ionic_format"; }
+    if (str_eq(callee, "http_get"))          { real_callee = "ionic_http_get"; }
+    if (str_eq(callee, "http_post"))         { real_callee = "ionic_http_post"; }
+    if (str_eq(callee, "http_status"))       { real_callee = "ionic_http_status"; }
+    if (str_eq(callee, "http_body"))         { real_callee = "ionic_http_body"; }
+    if (str_eq(callee, "http_urlencode"))    { real_callee = "ionic_http_urlencode"; }
     if (str_eq(callee, "min"))               { real_callee = "ionic_min"; }
     if (str_eq(callee, "max"))               { real_callee = "ionic_max"; }
     if (str_eq(callee, "abs"))               { real_callee = "ionic_abs"; }
@@ -1378,7 +1385,9 @@ fn ncg_call(int64 node) -> int64 {
         str_eq(callee, "float64_to_str") || str_eq(callee, "char_to_str")   ||
         str_eq(callee, "get_arg")        || str_eq(callee, "file_read")     ||
         str_eq(callee, "str_slice")      || str_eq(callee, "read_line")    ||
-        str_eq(callee, "str_replace")    || str_eq(callee, "format")) {
+        str_eq(callee, "str_replace")    || str_eq(callee, "format")         ||
+        str_eq(callee, "http_get")       || str_eq(callee, "http_post")      ||
+        str_eq(callee, "http_body")      || str_eq(callee, "http_urlencode")) {
         ncg_last_ty = 1;
     }
     if (str_eq(callee, "sqrt")           || str_eq(callee, "fabs")          ||
