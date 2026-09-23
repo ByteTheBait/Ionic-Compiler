@@ -449,11 +449,16 @@ fn sc_symbol_count() -> int64 {
 // Emit a "did you mean X?" hint line after the active diagnostic.
 // Walks to a fresh line (no source-line reprint) and prints in a Rust-style
 // "help:" prefix that doesn't bump sc_error_count (it's a hint, not an error).
+// When colors are enabled (terminal output), the suggestion name pops in
+// green so the eye lands on it; everything else stays dim.
 fn sc_hint_did_you_mean(string what, string suggestion) -> int64 {
     if (str_eq(suggestion, "")) { return 0; }
-    println(str_concat("    help: did you mean '",
-            str_concat(suggestion,
-            str_concat("' (similar ", str_concat(what, ")?")))));
+    color_autodetect();
+    let tag     = color_wrap(ANSI_BOLD_CYAN, "    help:");
+    let sugg    = color_wrap(ANSI_BOLD_GREEN, str_concat("'", str_concat(suggestion, "'")));
+    let suffix  = color_wrap(ANSI_DIM, str_concat("(similar ", str_concat(str_concat(what, ")?"))));
+    println(str_concat(str_concat(str_concat(tag, " did you mean "), sugg),
+            str_concat(" ", suffix)));
     return 0;
 }
 
