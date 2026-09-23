@@ -173,15 +173,66 @@ Import a whole module with a wildcard, or select specific symbols:
 
 ```ionic
 import std.math.*;                      // everything in lib/std/math.ionic
-import std.str.{contains, trim};        // just those two functions
+import std.str.{contains, trim};        // just those two functions (parsed but not yet filtered)
 import std.array.*;
 import std.io.*;
+import myutils;                          // resolves against project/user packages
 ```
 
-The import resolver (`src/imports.ionic`) loads the referenced module files from
-`lib/` during compilation, transitively expanding any imports inside them, and
-deduplicates so each module is included exactly once. Imported functions and
-constants become ordinary program declarations.
+#### Module resolution
+
+`src/imports.ionic` resolves a dotted path (e.g. `std.math`) by trying the
+following locations in order, taking the first match:
+
+1. `./.ionic/packages/<slash-form>.ionic` — project-local packages.
+2. `$HOME/.ionic/packages/<slash-form>.ionic` — user-central packages
+   (falls back to `$USERPROFILE` for Windows-style installs).
+3. `lib/<slash-form>.ionic` — the built-in standard library, but **only when
+   the first segment is `std`**. Non-`std` paths that miss layers 1 and 2
+   are reported as errors with the full list of paths that were tried.
+
+The dotted form `std.data.csv` is converted to slash form `std/data/csv` for
+the on-disk path, so packages are stored as a regular directory hierarchy
+inside `.ionic/packages/`. Each module is loaded at most once; cycles and
+duplicate imports are tolerated, and transitive imports are expanded before
+the dependents that need them.
+
+Layer 3 is intentionally restricted to the `std.` prefix so user packages can
+never accidentally shadow or pretend to be a built-in module.
+
+#### Layer-1 example
+
+```
+project/
+  .ionic/packages/utils.ionic    // contains `fn greet(string) -> string`
+  examples/hello.ionic
+```
+
+```ionic
+// examples/hello.ionic
+import utils;
+println(greet("world"));
+```
+
+#### Layer-2 example
+
+```
+~/.ionic/packages/utils.ionic    // shared across all projects on this machine
+```
+
+```ionic
+import utils;                     // same source — found via $HOME
+println(greet("alice"));
+```
+
+If nothing matches, the compiler exits non-zero with a diagnostic listing the
+paths it tried:
+
+```
+ionic: cannot resolve import 'nosuch.module'
+  tried: ./.ionic/packages/nosuch/module.ionic
+  tried: /Users/henry/.ionic/packages/nosuch/module.ionic
+```
 
 Available std modules: `std.math` (constants + float helpers), `std.str`
 (string utils), `std.array` (array utils over `[int64]`/`[float64]`),
@@ -247,7 +298,7 @@ src/
   lexer/           Lexer — Ionic source
   semantic/        Type checker — Ionic source
   main.ionic       Compiler entry point
-  imports.ionic    Import resolver (loads std modules, transitive dedup)
+  imports.ionic    Import resolver: project-local → user-central → stdlib, transitive dedup
   diagnostics.ionic  Error reporting
   compiler.ionic   Monolithic source (bootstrap only)
   codegen.ionic    Monolithic codegen (bootstrap only)

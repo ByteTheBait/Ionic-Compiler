@@ -1,24 +1,25 @@
 // ── Import resolution ────────────────────────────────────────────────────────
-// Resolves `import` statements at compile time by loading standard-library
-// module sources and splicing them into the user program.
+// Resolves `import` statements at compile time by loading sources from one
+// of three locations (first match wins):
 //
-// Strategy (whole-module include with transitive dedup):
-//   1. Scan source text line-by-line for `import <path>;` lines.
-//   2. For each, load the referenced module file from lib/ (recursively
-//      expanding any imports inside it), marking each module as loaded.
-//   3. Remove import lines from the accumulated source so they don't reach
-//      the parser (the checker/codegen treat ND_IMPORT_STMT as a no-op).
+//   1. ./.ionic/packages/<dotted-as-slash>.ionic   (project-local packages)
+//   2. $HOME/.ionic/packages/<dotted-as-slash>.ionic  (user-central packages)
+//      — falls back to $USERPROFILE for Windows compat
+//   3. lib/<dotted-as-slash>.ionic   (built-in stdlib, when first segment
+//      is "std" — the only legitimate path into the bundled library)
 //
-// The result is one combined source = user code (imports stripped) + all
-// transitively imported module sources. Modules are spliced in dependency
-// order so declarations are available before their dependents are parsed.
+// Selective imports `import std.X.{a,b};` are parsed but not yet filtered:
+// the whole module is included.
+//
+// Each loaded module is recursively expanded (its own imports are resolved
+// before it) and modules are deduped so cycles are tolerated.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Accumulated source fragments (dependency order). [0] is a sentinel.
 mut g_parts    = [""];
 mut g_part_cnt = 0;
 
-// Modules already loaded, keyed by dotted path (dedup markers). [0] sentinel.
+// Modules already loaded, keyed by dotted path. [0] sentinel.
 mut g_mod_paths = [""];
 mut g_mod_count = 0;
 
@@ -84,30 +85,190 @@ fn imp_next_nl(string s, int64 pos) -> int64 {
     let n = str_len(s);
     mut i = pos;
     while (i < n) {
-        if (str_index(s, i) == CH_NL) { return i; }
+        if (str_index(s, i) == 10) { return i; }   // CH_NL = 10
         i = i + 1;
     }
     return n;
 }
 
-// Convert a dotted module path to a lib file path.
-//   "std.math"      -> "lib/std/math.ionic"
-//   "std.data.csv"  -> "lib/std/data/csv.ionic"
-fn imp_modpath_to_file(string mp) -> string {
-    let n = str_len(mp);
-    mut lastdot = -1;
+// Convert a dotted module path to slash form.
+//   "std"           -> "std"
+//   "std.math"      -> "std/math"
+//   "std.data.csv"  -> "std/data/csv"
+fn imp_path_slash(string dotted) -> string {
+    let n = str_len(dotted);
+    if (n == 0) { return ""; }
+    mut out = "";
     mut i = 0;
     while (i < n) {
-        if (str_index(mp, i) == CH_DOT) { lastdot = i; }
+        let c = str_index(dotted, i);
+        if (c == 46) { out = str_concat(out, "/"); }   // CH_DOT = 46
+        else {
+            // Build a 1-char literal for each allowed ASCII identifier byte.
+            // Valid path-segment chars are [A-Za-z0-9_] — encode each one.
+            mut emit = "";
+            if (c == 95) { emit = "_"; }
+            if (c >= 48 && c <= 57) {
+                if (c == 48) { emit = "0"; }
+                if (c == 49) { emit = "1"; }
+                if (c == 50) { emit = "2"; }
+                if (c == 51) { emit = "3"; }
+                if (c == 52) { emit = "4"; }
+                if (c == 53) { emit = "5"; }
+                if (c == 54) { emit = "6"; }
+                if (c == 55) { emit = "7"; }
+                if (c == 56) { emit = "8"; }
+                if (c == 57) { emit = "9"; }
+            }
+            if (c >= 65 && c <= 90) {
+                if (c == 65) { emit = "A"; }
+                if (c == 66) { emit = "B"; }
+                if (c == 67) { emit = "C"; }
+                if (c == 68) { emit = "D"; }
+                if (c == 69) { emit = "E"; }
+                if (c == 70) { emit = "F"; }
+                if (c == 71) { emit = "G"; }
+                if (c == 72) { emit = "H"; }
+                if (c == 73) { emit = "I"; }
+                if (c == 74) { emit = "J"; }
+                if (c == 75) { emit = "K"; }
+                if (c == 76) { emit = "L"; }
+                if (c == 77) { emit = "M"; }
+                if (c == 78) { emit = "N"; }
+                if (c == 79) { emit = "O"; }
+                if (c == 80) { emit = "P"; }
+                if (c == 81) { emit = "Q"; }
+                if (c == 82) { emit = "R"; }
+                if (c == 83) { emit = "S"; }
+                if (c == 84) { emit = "T"; }
+                if (c == 85) { emit = "U"; }
+                if (c == 86) { emit = "V"; }
+                if (c == 87) { emit = "W"; }
+                if (c == 88) { emit = "X"; }
+                if (c == 89) { emit = "Y"; }
+                if (c == 90) { emit = "Z"; }
+            }
+            if (c >= 97 && c <= 122) {
+                if (c == 97)  { emit = "a"; }
+                if (c == 98)  { emit = "b"; }
+                if (c == 99)  { emit = "c"; }
+                if (c == 100) { emit = "d"; }
+                if (c == 101) { emit = "e"; }
+                if (c == 102) { emit = "f"; }
+                if (c == 103) { emit = "g"; }
+                if (c == 104) { emit = "h"; }
+                if (c == 105) { emit = "i"; }
+                if (c == 106) { emit = "j"; }
+                if (c == 107) { emit = "k"; }
+                if (c == 108) { emit = "l"; }
+                if (c == 109) { emit = "m"; }
+                if (c == 110) { emit = "n"; }
+                if (c == 111) { emit = "o"; }
+                if (c == 112) { emit = "p"; }
+                if (c == 113) { emit = "q"; }
+                if (c == 114) { emit = "r"; }
+                if (c == 115) { emit = "s"; }
+                if (c == 116) { emit = "t"; }
+                if (c == 117) { emit = "u"; }
+                if (c == 118) { emit = "v"; }
+                if (c == 119) { emit = "w"; }
+                if (c == 120) { emit = "x"; }
+                if (c == 121) { emit = "y"; }
+                if (c == 122) { emit = "z"; }
+            }
+            out = str_concat(out, emit);
+        }
         i = i + 1;
     }
-    mut dir = "lib";
-    mut name = mp;
-    if (lastdot >= 0) {
-        dir = str_concat("lib/", str_slice(mp, 0, lastdot));
-        name = str_slice(mp, lastdot + 1, n);
+    return out;
+}
+
+// Return the first segment of a dotted module path.
+//   "std.math"      -> "std"
+//   "std.data.csv"  -> "std"
+//   "math"          -> "math"
+fn imp_first_seg(string dotted) -> string {
+    let n = str_len(dotted);
+    mut i = 0;
+    while (i < n) {
+        if (str_index(dotted, i) == 46) { return str_slice(dotted, 0, i); }   // CH_DOT
+        i = i + 1;
     }
-    return str_concat(str_concat(str_concat(dir, "/"), name), ".ionic");
+    return dotted;
+}
+
+// Read a file's contents if it exists, else return "".
+fn imp_try_read(string path) -> string {
+    return file_read(path);
+}
+
+// Resolve a dotted module path against the three layers.  Loads + expands
+// the first match; prints a diagnostic + aborts via exit() if nothing matches.
+fn imp_resolve(string modpath) -> int64 {
+    if (imp_mod_loaded(modpath)) { return 0; }
+    imp_mod_mark(modpath);
+
+    let slash = imp_path_slash(modpath);
+    let home  = getenv("HOME");
+    let prof  = getenv("USERPROFILE");
+
+    // Layer 1: project-local
+    let p_local = str_concat("./.ionic/packages/", str_concat(slash, ".ionic"));
+    let c_local = imp_try_read(p_local);
+    if (str_len(c_local) > 0) {
+        imp_expand(c_local);
+        return 0;
+    }
+
+    // Layer 2: user-central
+    mut home_root = "";
+    if (str_len(home) > 0)        { home_root = home; }
+    else if (str_len(prof) > 0)   { home_root = prof; }
+    if (str_len(home_root) > 0) {
+        let p_user = str_concat(str_concat(home_root, "/.ionic/packages/"),
+                                str_concat(slash, ".ionic"));
+        let c_user = imp_try_read(p_user);
+        if (str_len(c_user) > 0) {
+            imp_expand(c_user);
+            return 0;
+        }
+    }
+
+    // Layer 3: built-in stdlib (only when first segment is "std")
+    let first = imp_first_seg(modpath);
+    // Compare first 3 bytes to "std" using numeric codes: s=115 t=116 d=100
+    let is_std = 0;
+    if (str_len(first) == 3) {
+        if (str_index(first, 0) == 115 &&
+            str_index(first, 1) == 116 &&
+            str_index(first, 2) == 100) {
+            is_std = 1;
+        }
+    }
+    if (is_std == 1) {
+        let p_std = str_concat("lib/", str_concat(slash, ".ionic"));
+        let c_std = imp_try_read(p_std);
+        if (str_len(c_std) > 0) {
+            imp_expand(c_std);
+            return 0;
+        }
+    }
+
+    // Nothing matched — list what we tried and exit non-zero.
+    println(str_concat("ionic: cannot resolve import '",
+            str_concat(modpath, "'")));
+    println(str_concat("  tried: ", p_local));
+    if (str_len(home_root) > 0) {
+        let p_user2 = str_concat(str_concat(home_root, "/.ionic/packages/"),
+                                 str_concat(slash, ".ionic"));
+        println(str_concat("  tried: ", p_user2));
+    }
+    if (is_std == 1) {
+        let p_std2 = str_concat("lib/", str_concat(slash, ".ionic"));
+        println(str_concat("  tried: ", p_std2));
+    }
+    exit(1);
+    return 0;
 }
 
 // Append one source fragment to the accumulated output (if non-empty).
@@ -131,7 +292,6 @@ fn imp_expand(string src) -> int64 {
         mut is_imp = 0;
         if (s0 < nl) {
             if (imp_starts_at(src, "import", s0)) {
-                // require a word boundary after 'import'
                 let after = s0 + 6;
                 if (after < n) {
                     let c = str_index(src, after);
@@ -140,21 +300,19 @@ fn imp_expand(string src) -> int64 {
             }
         }
         if (is_imp == 1) {
-            // Parse dotted module path: after 'import', read ident ('.' ident)*
             mut p = imp_skip_space(src, s0 + 6);
             let e1 = imp_span_ident(src, p);
             mut modpath = str_slice(src, p, e1);
             p = e1;
             mut done_p = 0;
             while (done_p == 0 && p < nl) {
-                if (p + 1 < n && str_index(src, p) == CH_DOT) {
+                if (p + 1 < n && str_index(src, p) == 46) {   // CH_DOT
                     let estart = p + 1;
                     let eend = imp_span_ident(src, estart);
                     if (eend > estart) {
                         modpath = str_concat(modpath, str_concat(".", str_slice(src, estart, eend)));
                         p = eend;
                     } else {
-                        // '.' followed by '*' or '{' or ';' — stop path.
                         done_p = 1;
                     }
                 } else {
@@ -163,7 +321,6 @@ fn imp_expand(string src) -> int64 {
             }
             imp_resolve(modpath);
         } else {
-            // Copy the line (with its newline) into the accumulator.
             acc = str_concat(acc, str_concat(str_slice(src, pos, nl), "\n"));
         }
         pos = nl + 1;
@@ -172,22 +329,7 @@ fn imp_expand(string src) -> int64 {
     return 0;
 }
 
-// Load a module by dotted path (idempotent), recursing into its imports.
-fn imp_resolve(string modpath) -> int64 {
-    if (imp_mod_loaded(modpath)) { return 0; }
-    imp_mod_mark(modpath);
-    let file = imp_modpath_to_file(modpath);
-    let content = file_read(file);
-    if (str_len(content) == 0) {
-        println(str_concat("ionic: cannot open module '", str_concat(modpath,
-                str_concat("' (", str_concat(file, ")")))));
-        return 0;
-    }
-    imp_expand(content);
-    return 0;
-}
-
-// Reset import resolver state for a fresh invocation (used once per compile).
+// Reset import resolver state for a fresh invocation.
 fn imp_reset() -> int64 {
     g_parts    = [""];
     g_part_cnt = 0;
