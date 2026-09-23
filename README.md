@@ -42,7 +42,7 @@ fib(10) = 55
 - **Web request primitives** — `http_get`, `http_post`, `http_status`, `http_body`, `http_urlencode` (HTTP/1.1 client via raw sockets, no TLS) plus a `std.http` wrapper module
 - **Hardware-aware types** — `tensor@cpu` and `tensor@gpu` prevent accidental cross-device ops
 - **Real ML backends** — GGUF models via llama.cpp with Metal GPU; ONNX/CoreML; Piper TTS
-- **Human-readable errors** — multi-error reporting, source-line carets, column tracking, panic-mode recovery
+- **Human-readable errors** — multi-error reporting, source-line carets, column tracking, panic-mode recovery, enclosing-function context, "did you mean…" suggestions, clickable `path:line:col` jump links, ANSI colors that auto-disable when not a TTY
 - **Optimizer** — a self-hosted optimization pipeline (fold, inline, unroll, const-propagate) that runs on every compilation before codegen
 - **Modern syntax** — compound assignment (`+=`, `-=`, `*=`, `/=`), block comments `/* ... */`, and panic-mode lexer recovery
 
@@ -90,6 +90,59 @@ After that, `ionic_self` and `ionic_new` are both native ARM64 binaries. `ionic_
 let x = 6 * 7;
 println(int64_to_str(x));   // prints 42
 ```
+
+---
+
+## Diagnostics
+
+Errors are structured, multi-error (every problem in a file is reported in
+one pass), and colorized when stdout is a terminal. A typical error in a
+TTY:
+
+```
+    at /Users/henry/Developer/AILANG/examples/foo.ionic:5:12
+[error] 5:12: unknown variable 'x': not declared in this scope
+    in fn compute(int64 n) -> int64 {
+        return x + 1;
+               ^
+    help: did you mean 'xs' (similar variable)?
+1 error(s) found.
+    hint: re-run `/Users/henry/Developer/AILANG/examples/foo.ionic` in your editor (hx) -- click path:line:col above to jump.
+```
+
+In a plain terminal / CI log (`NO_COLOR=1`, pipe, `TERM=dumb`, …) the escape
+codes are stripped and the path is rendered as plain `at path:line:col`:
+
+```
+    at examples/foo.ionic:5:12
+[error] 5:12: unknown variable 'x': not declared in this scope
+    in fn compute(int64 n) -> int64 {
+        return x + 1;
+               ^
+    help: did you mean 'xs' (similar variable)?
+```
+
+Five features make this work well:
+
+- **Multi-error reporting** — the parser continues after the first error
+  via `p_sync_stmt` / `p_sync_top` (advance to next `;` or `fn`/`let`/`struct`
+  boundary), so 10 syntax errors in one file produce 10 diagnostics, not 1.
+- **"Did you mean…" suggestions** — unknown names are matched against the
+  registered function / variable / struct pools via Levenshtein distance
+  (threshold: edits ≤ 2 for len ≥ 3, else ≤ ceil(len/3)). The closest
+  candidate becomes a `help:` hint.
+- **Enclosing-function context** — every error in a function body shows
+  its `fn header` line in dim gray above the source line, so the caret has
+  a frame of reference.
+- **Clickable `path:line:col` jump links** — emitted above each `[error]`
+  line. VSCode / iTerm2 / Neovim auto-detect these and make them Cmd-clickable;
+  in colored TTYs the path is underlined + cyan.
+- **`$EDITOR` / `$VISUAL` hint** — if either is set, the compiler prints a
+  final hint line naming the editor and reminding you that the
+  `path:line:col` line above is what your editor jumps on.
+
+Color autodetection honors [no-color.org](https://no-color.org/): set
+`NO_COLOR=1` (or `TERM=dumb`) to disable escape codes for CI logs.
 
 ---
 
