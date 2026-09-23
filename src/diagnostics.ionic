@@ -63,6 +63,55 @@ fn color_autodetect() -> int64 {
 // Set g_source before calling print_span so it can print the source line.
 mut g_source = "";
 
+// Source path of the file currently being compiled. Set by main.ionic to
+// the argv[1] argument (or "<source>" for stdin). Used by print_jump_hint
+// to render the clickable file:line:col link that editors like VSCode,
+// iTerm2, and Neovim auto-detect.
+mut g_source_path = "<source>";
+
+// Build the clickable "path:line:col" string for the given location.
+// When colors are enabled, wraps the path in cyan+underline so it pops.
+// Otherwise returns plain text — which is what editors parse.
+fn print_jump_hint(int64 line, int64 col) -> int64 {
+    let link = str_concat(g_source_path, str_concat(":",
+                  str_concat(int64_to_str(line), str_concat(":",
+                  str_concat(int64_to_str(col), "")))));
+    // Plain text path is always emitted so editors can extract it; this is
+    // what VSCode/iTerm2/Neovim auto-detect as a clickable link.
+    if (g_color_enabled == 1) {
+        let underline_cyan = str_concat(ANSI_ESC, "[4;36m");
+        println(str_concat("    at ",
+               str_concat(underline_cyan,
+               str_concat(link, ANSI_RESET))));
+    } else {
+        println(str_concat("    at ", link));
+    }
+    return 0;
+}
+
+// After printing all errors, if $EDITOR or $VISUAL is set, print a one-liner
+// telling the user how to re-run with their editor. Cheap DX win.
+// Guarded by a flag so it only fires once even if called multiple times
+// (e.g. parser errors AND semantic errors both calling exit(1)).
+mut g_editor_hint_shown = 0;
+
+fn print_editor_hint() -> int64 {
+    if (g_editor_hint_shown == 1) { return 0; }
+    let editor = getenv("VISUAL");
+    if (str_eq(editor, "")) { editor = getenv("EDITOR"); }
+    if (str_eq(editor, "")) { return 0; }
+    g_editor_hint_shown = 1;
+    // Build the hint in 4 pieces (opening, path, parens+editor, closing)
+    // to avoid a deep str_concat chain. ASCII only -- the lexer mangles
+    // UTF-8 multi-byte chars (e.g. em-dash -> 0x14).
+    let part1 = str_concat("    hint: re-run `", g_source_path);
+    let part2 = str_concat(part1, "` in your editor (");
+    let part3 = str_concat(part2, editor);
+    let part4 = str_concat(str_concat(part3, ") -- click path:line:col above to jump."));
+    println(part4);
+    return 0;
+}
+
 // Enclosing function context (set by the semantic checker before descending
 // into a function body). When nonzero, print_span prints a one-line dim
 // header like "    in fn compute(int64 n) -> int64 {" above the source line
@@ -160,12 +209,16 @@ fn diag_spaces(int64 n) -> string {
 }
 
 // Print a caret diagnostic:
+//   path:line:col:                      (clickable jump link)
 //   [error] line:col: message
 //       in fn foo() -> int64 {          (if error is inside a fn body)
 //       source line text
 //       ^
 fn print_span(int64 line, int64 col, string msg) -> int64 {
     color_autodetect();
+    // Emit the clickable jump link first so editors can pick it up even if
+    // the user filters lines that contain "[error]" out of their buffer.
+    print_jump_hint(line, col);
     // Layout: bold-red "[error] ", cyan "line:col:", reset, then message.
     let tag   = color_wrap(ANSI_BOLD_RED, "[error]");
     let loc   = color_wrap(ANSI_CYAN, str_concat(int64_to_str(line), str_concat(":", str_concat(int64_to_str(col), ":"))));
