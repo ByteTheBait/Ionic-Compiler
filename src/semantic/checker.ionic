@@ -1171,6 +1171,15 @@ fn sc_fn(int64 fn_node) -> int64 {
     sc_cur_fn_ret_ty = ret_ty;
     sc_cur_fn_ret_sv = ret_sv_val;
 
+    // Push enclosing-fn diagnostic context so errors inside this body
+    // show "    in fn name(...) -> ret_ty {" above the source line.
+    // Note: parse_fn stores the fn keyword's line in nd_iv (the intent-value
+    // slot) because by the time new_node runs, g_cur_line has advanced past
+    // the body. nd_line at the FN_DEF node points to the end of the header.
+    let fn_line  = nd_iv[fn_node];
+    let fn_label = diag_extract_line(g_source, diag_line_start(g_source, fn_line));
+    sc_ctx_push_fn(fn_line, fn_label);
+
     sv_push_frame();
     mut pnode = params_list;
     while (pnode != 0) {
@@ -1184,6 +1193,7 @@ fn sc_fn(int64 fn_node) -> int64 {
     sc_block_stmts(body_list);
     sv_pop_frame();
 
+    sc_ctx_pop_fn();
     sc_cur_fn_name   = saved_fn;
     sc_cur_fn_ret_ty = saved_rty;
     sc_cur_fn_ret_sv = saved_rsv;

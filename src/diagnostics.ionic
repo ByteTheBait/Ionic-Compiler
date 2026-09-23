@@ -63,6 +63,67 @@ fn color_autodetect() -> int64 {
 // Set g_source before calling print_span so it can print the source line.
 mut g_source = "";
 
+// Enclosing function context (set by the semantic checker before descending
+// into a function body). When nonzero, print_span prints a one-line dim
+// header like "    in fn compute(int64 n) -> int64 {" above the source line
+// so the user has a frame of reference for the caret position.
+//
+//   sc_ctx_fn_line      — line where the enclosing `fn` starts (1-based)
+//   sc_ctx_fn_label     — the human-readable signature line, e.g.
+//                          "fn compute(int64 n) -> int64 {"
+//
+// Set both to 0 / "" at top level (or when no enclosing fn is active).
+mut sc_ctx_fn_line = 0;
+mut sc_ctx_fn_label = "";
+
+// Stack of (line, label) so nested function definitions (which the
+// language allows via local fn) properly nest/restore the context.
+// sc_ctx_fn_depth is the logical number of pushed frames; 0 = "no
+// enclosing fn". The arrays store parents at their depth slot.
+mut sc_ctx_fn_depth = 0;
+mut sc_ctx_fn_line_stack = [0];
+mut sc_ctx_fn_label_stack = [""];
+
+// Save the current enclosing-fn context and push a new one. The new line
+// is where the new fn header starts; the new label is its signature.
+fn sc_ctx_push_fn(int64 line, string label) -> int64 {
+    sc_ctx_fn_depth = sc_ctx_fn_depth + 1;
+    // Grow the arrays if needed (push if past current capacity).
+    if (sc_ctx_fn_depth >= len(sc_ctx_fn_line_stack)) {
+        sc_ctx_fn_line_stack.push(sc_ctx_fn_line);
+        sc_ctx_fn_label_stack.push(sc_ctx_fn_label);
+    } else {
+        sc_ctx_fn_line_stack[sc_ctx_fn_depth]  = sc_ctx_fn_line;
+        sc_ctx_fn_label_stack[sc_ctx_fn_depth] = sc_ctx_fn_label;
+    }
+    sc_ctx_fn_line  = line;
+    sc_ctx_fn_label = label;
+    return 0;
+}
+
+// Pop back to the previous enclosing-fn context (one level up).
+// Uses the sv_pop_frame pattern: just decrement the depth counter and
+// restore from the array slot. Doesn't need array.pop() (which the
+// runtime doesn't expose).
+fn sc_ctx_pop_fn() -> int64 {
+    if (sc_ctx_fn_depth <= 0) {
+        sc_ctx_fn_line  = 0;
+        sc_ctx_fn_label = "";
+        return 0;
+    }
+    sc_ctx_fn_depth = sc_ctx_fn_depth - 1;
+    let idx = sc_ctx_fn_depth;
+    if (idx == 0) {
+        // depth 0 means "no context" — the [0] sentinels are the defaults.
+        sc_ctx_fn_line  = 0;
+        sc_ctx_fn_label = "";
+    } else {
+        sc_ctx_fn_line  = sc_ctx_fn_line_stack[idx];
+        sc_ctx_fn_label = sc_ctx_fn_label_stack[idx];
+    }
+    return 0;
+}
+
 // Return the byte offset of the start of line `line` (1-based) in src.
 fn diag_line_start(string src, int64 line) -> int64 {
     mut cur = 1;
@@ -100,6 +161,7 @@ fn diag_spaces(int64 n) -> string {
 
 // Print a caret diagnostic:
 //   [error] line:col: message
+//       in fn foo() -> int64 {          (if error is inside a fn body)
 //       source line text
 //       ^
 fn print_span(int64 line, int64 col, string msg) -> int64 {
@@ -111,6 +173,13 @@ fn print_span(int64 line, int64 col, string msg) -> int64 {
     if (str_len(g_source) > 0) {
         let lstart = diag_line_start(g_source, line);
         let text   = diag_extract_line(g_source, lstart);
+        // Enclosing-context line: only show when we have a context AND the
+        // error is below the function header (i.e. inside the body, not on
+        // the header line itself which would be redundant with the caret).
+        if (sc_ctx_fn_line > 0 && line > sc_ctx_fn_line && str_len(sc_ctx_fn_label) > 0) {
+            let ctx = color_wrap(ANSI_DIM, str_concat("    in ", sc_ctx_fn_label));
+            println(ctx);
+        }
         // Source line: 4-space indent + bold-yellow text.
         println(str_concat("    ", color_wrap(ANSI_BOLD_YELLOW, text)));
         // Caret line: col is 1-based, indent is 4 chars → caret lands at column (col + 3).
