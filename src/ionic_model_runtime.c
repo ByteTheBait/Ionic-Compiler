@@ -593,7 +593,8 @@ static const char *gguf_generate(void *model, const char *prompt, int64_t max_to
     /* Build sampler chain */
     struct llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     struct llama_sampler *smpl = llama_sampler_chain_init(sparams);
-    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, 1.1f, 0.0f, 0.0f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+        (int32_t)llama_vocab_n_tokens(vocab), 64, 1.1f, 0.0f, 0.0f));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(h->top_p, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(h->temperature));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
