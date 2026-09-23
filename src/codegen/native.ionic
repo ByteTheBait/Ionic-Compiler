@@ -1088,6 +1088,11 @@ fn ncg_expr(int64 node) -> int64 {
         }
         let r = scratch_push();
         a64_mov(r, REG_X0);
+        // Array elements are stored as int64 bit-patterns, so a float element
+        // needs its D-register populated for subsequent float arithmetic to see
+        // the correct value. Copying X→D unconditionally is harmless for
+        // int/string/struct element types (D is unused by their ops).
+        text_u32(0x9E670000 | (r << 5) | r);  // FMOV D{r}, X{r}
         return r;
     }
 

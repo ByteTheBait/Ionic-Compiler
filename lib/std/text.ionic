@@ -1,0 +1,113 @@
+/// Text and tokenization helpers. Import: `import std.text.*;`
+
+/// Trims leading/trailing ASCII spaces and tabs.
+fn trim_txt(string s) -> string {
+    let n = str_len(s);
+    mut lo = 0;
+    while (lo < n && (str_index(s, lo) == 32 || str_index(s, lo) == 9)) { lo = lo + 1; }
+    mut hi = n - 1;
+    while (hi > lo && (str_index(s, hi) == 32 || str_index(s, hi) == 9)) { hi = hi - 1; }
+    if (hi < lo) { return ""; }
+    return str_slice(s, lo, hi + 1);
+}
+
+/// Is c an ASCII letter (a-z / A-Z)?
+fn is_alpha(int64 c) -> bool {
+    if (c >= 65 && c <= 90)  { return true; }
+    if (c >= 97 && c <= 122) { return true; }
+    return false;
+}
+
+/// Is c an ASCII digit (0-9)?
+fn is_digit(int64 c) -> bool {
+    if (c >= 48 && c <= 57) { return true; }
+    return false;
+}
+
+/// Is c a word character (letter/digit/underscore)?
+fn is_alnum_underscore(int64 c) -> bool {
+    if (c >= 48 && c <= 57)  { return true; }
+    if (c >= 65 && c <= 90)  { return true; }
+    if (c >= 97 && c <= 122) { return true; }
+    if (c == 95)             { return true; }  // '_'
+    return false;
+}
+
+/// Tokenizes s into words (contiguous runs of letters/digits/underscore),
+/// punctuation dropped. Returns [string].
+fn tokenize(string s) -> [string] {
+    mut toks = [""];
+    let n = str_len(s);
+    mut i = 0;
+    while (i < n) {
+        // Skip non-word characters
+        while (i < n && is_alnum_underscore(str_index(s, i)) == false) { i = i + 1; }
+        if (i >= n) { return toks; }
+        // Collect a word
+        mut w = "";
+        while (i < n && is_alnum_underscore(str_index(s, i)) == true) {
+            w = str_concat(w, char_to_str(str_index(s, i)));
+            i = i + 1;
+        }
+        toks.push(w);
+    }
+    return toks;
+}
+
+/// Splits s into words on whitespace (spaces/tabs/newlines), preserving word
+/// characters only. Returns [string].
+fn words(string s) -> [string] {
+    let n = str_len(s);
+    mut out = [""];
+    mut i = 0;
+    while (i < n) {
+        let c = str_index(s, i);
+        if (is_alnum_underscore(c)) {
+            mut w = "";
+            while (i < n && is_alnum_underscore(str_index(s, i))) {
+                w = str_concat(w, char_to_str(str_index(s, i)));
+                i = i + 1;
+            }
+            out.push(w);
+        } else {
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+/// Counts occurrences of `sub` in `s` (non-overlapping).
+fn count_substr(string s, string sub) -> int64 {
+    let n = str_len(s);
+    let m = str_len(sub);
+    if (m == 0) { return 0; }
+    mut count = 0;
+    mut i = 0;
+    while (i <= n - m) {
+        if (str_eq(str_slice(s, i, i + m), sub)) {
+            count = count + 1;
+            i = i + m;
+        } else {
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
+/// Returns a new string with all occurrences of `from` replaced by `to`.
+fn replace_all(string s, string from, string to) -> string {
+    return str_replace(s, from, to);
+}
+
+/// Joins a [string] array into one string with sep between elements.
+fn join([string] parts, string sep) -> string {
+    let n = len(parts) - 1;
+    mut out = "";
+    mut i = 1;
+    while (i < n + 1) {
+        out = str_concat(out, parts[i]);
+        if (i < n) { out = str_concat(out, sep); }
+        i = i + 1;
+    }
+    return out;
+}

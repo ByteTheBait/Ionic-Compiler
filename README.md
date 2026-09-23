@@ -38,7 +38,7 @@ fib(10) = 55
 - **Rich string builtins** — `format`, `str_concat`, `str_len`, `str_slice`, `str_replace`, `str_contains`, `str_starts_with`, `str_ends_with`, `int64_to_str`
 - **Arrays** — `[int64]`/`[float64]`/`[string]` types, `.push`, `.len`, `arr_reset`, indexing and element assignment; element types are tracked through the checker
 - **Import system** — `import std.math.*;` and selective `import std.str.{contains, trim};` pull in standard-library modules transitively with dedup
-- **Standard library** — `std.math`, `std.str`, `std.array`, `std.io` (and more) live under `lib/std/`
+- **Standard library** — `std.math`, `std.str`, `std.array`, `std.io`, `std.data`, `std.text` (and more) live under `lib/std/`
 - **Hardware-aware types** — `tensor@cpu` and `tensor@gpu` prevent accidental cross-device ops
 - **Real ML backends** — GGUF models via llama.cpp with Metal GPU; ONNX/CoreML; Piper TTS
 - **Human-readable errors** — multi-error reporting, source-line carets, column tracking, panic-mode recovery
@@ -183,8 +183,11 @@ deduplicates so each module is included exactly once. Imported functions and
 constants become ordinary program declarations.
 
 Available std modules: `std.math` (constants + float helpers), `std.str`
-(string utils), `std.array` (array utils over `[int64]`/`[float64]`), and
-`std.io` (readline, eprint, print_hr).
+(string utils), `std.array` (array utils over `[int64]`/`[float64]`),
+`std.io` (readline, eprint, print_hr), `std.data` (lower/upper/clean,
+normalize_ws, CSV parse/split, mean/stdev/min/max over `[float64]`,
+to_csv_line), and `std.text` (tokenize, words, count_substr, replace_all,
+join).
 
 ---
 
