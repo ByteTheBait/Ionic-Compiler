@@ -90,6 +90,17 @@ jobs:
     needs: publish-release
     runs-on: ubuntu-latest
 
+    # Dispatches a `new-release` event to ByteTheBait/homebrew-ionic, where
+    # an update-formula.yml workflow at `.github/workflows/update-formula.yml`
+    # rewrites Formula/ionic.rb with the new version + SHA256.
+    # IMPORTANT: GitHub requires the receiving workflow file to live under
+    # `.github/workflows/` *and* to be on the default branch at dispatch
+    # time. Older releases of this tap had `workflows/update-formula.yml`
+    # (no leading dot) which GitHub Actions ignored. After pasting the file
+    # at `.github/workflows/update-formula.yml` (PAT or GitHub.com UI — the
+    # `workflow` OAuth scope is required to write to that path), the tap
+    # updates automatically on every tagged release.
+
     steps:
       - name: Download checksums
         uses: actions/download-artifact@v4
