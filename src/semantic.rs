@@ -175,6 +175,20 @@ impl SemanticAnalyzer {
         self.errors.push(msg);
     }
 
+    /// Type compatibility, matching the self-hosted checker's `ty_compat`:
+    /// unknown on either side is compatible, bool and int64 are the same at
+    /// runtime, and otherwise the types must be equal.
+    fn ty_compat(got: &Type, want: &Type) -> bool {
+        if *want == Type::Unknown || *got == Type::Unknown {
+            return true;
+        }
+        if got == want {
+            return true;
+        }
+        matches!((got, want),
+            (Type::Bool, Type::Int64) | (Type::Int64, Type::Bool))
+    }
+
     fn analyze_stmt(&mut self, stmt: &Stmt, ret_ty: &Type) {
         match stmt {
             Stmt::Let { mutable, name, ty, init, hw: _ } => {
@@ -205,7 +219,7 @@ impl SemanticAnalyzer {
                                 if !info.mutable {
                                     self.error(format!("Cannot assign to immutable variable `{}`", name));
                                 }
-                                if val_ty != info.ty && val_ty != Type::Unknown && info.ty != Type::Unknown {
+                                if !Self::ty_compat(&val_ty, &info.ty) {
                                     self.error(format!(
                                         "Type mismatch in assignment to `{}`: expected `{}`, got `{}`",
                                         name, info.ty, val_ty
@@ -240,7 +254,7 @@ impl SemanticAnalyzer {
 
             Stmt::Return(expr) => {
                 let actual = expr.as_ref().map(|e| self.infer_expr(e)).unwrap_or(Type::Void);
-                if *ret_ty != Type::Void && actual != *ret_ty && actual != Type::Unknown {
+                if *ret_ty != Type::Void && !Self::ty_compat(&actual, ret_ty) {
                     self.error(format!(
                         "Return type mismatch: expected `{}`, got `{}`", ret_ty, actual
                     ));
@@ -381,8 +395,11 @@ impl SemanticAnalyzer {
                 if let Some((_, ret)) = self.functions.get(callee).cloned() {
                     ret
                 } else {
-                    // Unknown functions may be extern C symbols linked at runtime; treat as int64.
-                    Type::Int64
+                    // Unregistered names may be extern C symbols linked at
+                    // runtime (getenv, str_slice, math, ML, …). Mirror the
+                    // self-hosted checker's `fn_ret_ty`, which returns
+                    // TY_UNKNOWN for these rather than guessing a type.
+                    Type::Unknown
                 }
             }
 

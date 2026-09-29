@@ -1,0 +1,63 @@
+/// Multi-target differential test.
+///
+/// Exercises `std.math`, `std.str`, and the bitwise operators so the Mach-O
+/// (macOS arm64) and ARM64 ELF (Linux) emitters can be checked for identical
+/// logical output. Every line is labelled and deterministic: floats go through
+/// `float64_to_str` (fixed 6-decimal `%lf`), integers through `int64_to_str`,
+/// so the same source yields byte-identical stdout on every backend.
+///
+/// CI compiles and runs this on macos-14 (Mach-O) and ubuntu-24.04-arm (ELF)
+/// and diffs each output against the committed golden file
+/// `examples/multitarget_test.expected`.
+
+import std.math.*;
+import std.str.*;
+
+fn main() -> int64 {
+    // ── std.math: constants ──────────────────────────────────────────────────
+    println(str_concat("PI=", float64_to_str(PI)));
+    println(str_concat("TAU=", float64_to_str(TAU)));
+    println(str_concat("E=", float64_to_str(E)));
+
+    // ── std.math: functions ──────────────────────────────────────────────────
+    println(str_concat("clamp=", float64_to_str(clamp(2.5, 0.0, 1.0))));
+    println(str_concat("lerp=", float64_to_str(lerp(0.0, 100.0, 0.25))));
+    println(str_concat("sign_pos=", float64_to_str(sign(3.0))));
+    println(str_concat("sign_neg=", float64_to_str(sign(-3.0))));
+    println(str_concat("sign_zero=", float64_to_str(sign(0.0))));
+    println(str_concat("min_f=", float64_to_str(min_f(2.0, 7.0))));
+    println(str_concat("max_f=", float64_to_str(max_f(2.0, 7.0))));
+    println(str_concat("pow_i=", float64_to_str(pow_i(2.0, 10))));
+    // NOTE: std.math `degrees`/`radians` are deliberately not exercised here.
+    // They compute `x * (180.0 / PI)` / `x * (PI / 180.0)` — a *division whose
+    // right operand is a top-level float global* — which the self-hosted
+    // codegen currently miscompiles (e.g. `180.0 / PI` evaluates to 32400).
+    // That is a pre-existing float-global bug tracked separately; including it
+    // would make this cross-backend comparison flaky rather than meaningful.
+
+    // ── std.str: predicates ──────────────────────────────────────────────────
+    println(str_concat("contains=", int64_to_str(contains("hello world", "world"))));
+    println(str_concat("starts_with=", int64_to_str(starts_with("hello", "he"))));
+    println(str_concat("ends_with=", int64_to_str(ends_with("hello", "lo"))));
+    println(str_concat("count_char=", int64_to_str(count_char("banana", 97))));
+
+    // ── std.str: builders / transforms ───────────────────────────────────────
+    println(str_concat("repeat=", repeat("ab", 3)));
+    println(str_concat("pad_left=", pad_left("7", 3, "0")));
+    println(str_concat("pad_right=", pad_right("7", 3, ".")));
+    println(str_concat("trim_left=", trim_left("   hi")));
+    println(str_concat("trim_right=", trim_right("hi   ")));
+    println(str_concat("trim=", trim("   hi   ")));
+    println(str_concat("str_reverse=", str_reverse("ionic")));
+
+    // ── bitwise operators (Phase 1: source-only bootstrap) ───────────────────
+    println(str_concat("band=", int64_to_str(12 & 10)));
+    println(str_concat("bor=", int64_to_str(12 | 10)));
+    println(str_concat("bxor=", int64_to_str(12 ^ 10)));
+    println(str_concat("shl=", int64_to_str(1 << 4)));
+    println(str_concat("shr=", int64_to_str(256 >> 2)));
+    println(str_concat("bnot=", int64_to_str(~0)));
+    println(str_concat("prec=", int64_to_str(1 | 2 ^ 3 & 4)));
+
+    return 0;
+}

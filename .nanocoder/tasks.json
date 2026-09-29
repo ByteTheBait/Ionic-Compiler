@@ -1,0 +1,66 @@
+[
+  {
+    "id": "22d39cf4",
+    "title": "Add bitwise tokens to Rust lexer",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "3ddbe81f",
+    "title": "Add bitwise precedence levels + ~ unary to Rust parser",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "9dce55ac",
+    "title": "Build Rust compiler and verify bitwise programs compile",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "357bf1fa",
+    "title": "Add text-level relative-import preprocessor to Rust frontend",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "4b8e3e6a",
+    "title": "Close semantic + codegen gaps so Rust bootstrap builds src/main.ionic",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "cd7a9c4f",
+    "title": "Verified source-only bootstrap of src/main.ionic",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "ec665cc6",
+    "title": "Regression check: official self-hosting + examples",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  },
+  {
+    "id": "d4b263dc",
+    "title": "Add CI matrix for multi-target (Mach-O + ARM64 ELF) differential testing",
+    "status": "completed",
+    "createdAt": "2026-09-29T20:48:26.641Z",
+    "updatedAt": "2026-09-29T20:48:26.641Z",
+    "completedAt": "2026-09-29T20:48:26.641Z"
+  }
+]

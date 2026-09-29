@@ -1,7 +1,7 @@
 # Ionic
 
 A statically-typed, self-hosting compiled language targeting native ARM64 (macOS). Ionic compiles directly to Mach-O object files — no LLVM required at runtime — and enforces hardware placement at the type level: `tensor@cpu` and `tensor@gpu` are distinct types and the compiler rejects code that crosses the boundary without an explicit transfer.
-
+[~](assets/ionic_demo.gif)
 ```ionic
 fn fibonacci(int64 n) -> int64 {
     if (n <= 1) { return n; }
@@ -56,10 +56,12 @@ Two compilers live in the tree:
   `.ionic` sources in `src/`. This is what we ship in releases and what
   end users run.
 - **`target/release/ionic`** — the Rust/LLVM bootstrap (cross-OS). Built
-  from `src/*.rs` via `cargo build --release`. Used by CI to test user
-  programs on any OS with Rust + clang installed; it can compile
-  ordinary `.ionic` files but is missing bitwise-operator support, so
-  it can't build `ionic_new` itself.
+  from `src/*.rs` via `cargo build --release`. It can compile *any*
+  `.ionic` program on any OS with Rust + clang installed — including the
+  self-hosted sources themselves (`src/main.ionic`), because it implements
+  the full operator set (bitwise `& | ^ ~ << >>`), hex literals, and the
+  relative-import splicing that assembles the split `src/` tree. A fresh
+  clone with Rust + clang needs no committed `ionic_self` to bootstrap.
 
 A prebuilt **`ionic_self`** is checked in at the repo root — it's the
 binary version of `ionic_new` plus any updates since the last release.
@@ -86,19 +88,23 @@ cd AILANG
 ./build.sh                                  # ~3 s; uses ./ionic_self to rebuild ./ionic_new
 ```
 
-### Cross-platform bootstrap (CI / fresh Linux clone)
+### Cross-platform, source-only bootstrap
 
 When you don't have an `ionic_self` but do have Rust + clang:
 
 ```sh
 cargo build --release                       # → target/release/ionic (Rust LLVM compiler)
+./target/release/ionic src/main.ionic -o ionic_new   # → self-hosted compiler, no ionic_self needed
 ```
 
-`target/release/ionic` will compile any ordinary `.ionic` program on
-Linux ARM64, Windows, macOS, etc. — useful for cross-OS CI smoke tests.
-To rebuild the self-hosted `ionic_new`, you still need the bootstrap
-binary; adding bitwise-operator support to the Rust bootstrap is the
-next-stage work for fully source-only cross-OS builds.
+`target/release/ionic` is a complete Rust/LLVM bootstrap. It speaks the
+full language the self-hosted compiler uses — bitwise operators
+(`& | ^ ~ << >>`, with the same precedence as the self-hosted parser),
+hex literals, and the relative `import "path.ionic";` splicing that
+assembles the split `src/` tree — so it can compile **the compiler itself**
+on any OS with Rust + clang (Linux ARM64, macOS, Windows). This is what
+makes the tree bootstrap-capable from source alone: a fresh clone needs
+only `cargo build` plus the `.ionic` sources.
 
 ### Verifying the self-hosted compiler
 
@@ -470,8 +476,8 @@ src/
   main.ionic       Compiler entry point
   imports.ionic    Import resolver: project-local → user-central → stdlib, transitive dedup
   diagnostics.ionic  Error reporting with ANSI colors, jump links, did-you-mean
-  codegen.rs       Rust LLVM backend (cross-OS CI bootstrap)
-  lexer.rs / parser.rs / ast.rs / semantic.rs / imports.rs / main.rs  Rust frontend
+  codegen.rs       Rust LLVM backend (cross-OS bootstrap)
+  lexer.rs / parser.rs / ast.rs / semantic.rs / imports.rs / resolve.rs / main.rs  Rust frontend
   ionic_model_runtime.c   Native runtime: I/O, arrays, strings, math, ML, llama.cpp
 build.sh           Build script (--verify-self-hosting for regression check)
 ionic_new          Primary compiler binary (self-hosted)
@@ -484,12 +490,21 @@ tree-sitter-ionic/ Tree-sitter grammar + highlight queries for editors
 ## Self-hosting cycle
 
 ```
-(cargo build --release)  ──>  target/release/ionic   (Rust LLVM, cross-OS)
-ionic_self               ──>  ionic_new               (committed bootstrap)
+(cargo build --release)  ──>  target/release/ionic   (Rust LLVM bootstrap, cross-OS)
+target/release/ionic     ──>  ionic_new               (source-only bootstrap, any OS)
+ionic_self               ──>  ionic_new               (committed-binary bootstrap)
 ionic_new                ──>  ionic_new                (self-hosted, fixed point)
 ```
 
-The Rust source (`src/*.rs`) is the cross-OS dev-only bootstrap; the
-committed `ionic_self` is what actually builds the released `ionic_new`
-on a fresh checkout with no Rust installed. End users who install the
-tarball only ever see `ionic_new`.
+There are two independent ways to bootstrap, and both now start from the
+`.ionic` sources in `src/`:
+
+- **Rust bootstrap** — `cargo build --release`, then compile `src/main.ionic`.
+  Works on any OS with Rust + clang (Linux ARM64, macOS, Windows) and needs
+  no committed binary.
+- **Committed binary** — the checked-in `ionic_self` rebuilds `ionic_new`
+  with no toolchain at all; this is what releases and most end users use.
+
+Once a self-hosted `ionic_new` exists it is a fixed point: it reproduces
+itself (byte-identical object files). End users who install the tarball
+only ever see `ionic_new`.
