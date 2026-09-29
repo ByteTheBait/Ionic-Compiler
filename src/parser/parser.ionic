@@ -671,6 +671,15 @@ fn parse_fn(Parser p) -> int64 {
     return new_node(ND_FN_DEF, name, line, build_list(params, np), ret_ty, body);
 }
 
+// parse_fn plus the leading @gpu/@cpu annotation node (0 = HW_NONE), stashed
+// in the node's spare nd_i5 slot so the checker can tell which device a
+// function body is meant to run on.
+fn parse_fn_hw(Parser p, int64 hw) -> int64 {
+    let node = parse_fn(p);
+    nd_i5[node] = hw;
+    return node;
+}
+
 fn parse_struct_def(Parser p) -> int64 {
     if (g_parse_error != 0) { return 0; }
     p_advance(p);
@@ -791,7 +800,7 @@ fn parse_program(Parser p) -> [int64] {
                 ns = ns + 1;
             } else {
                 if (k == TOK_FN) {
-                    push(fn_arr, parse_fn(p));
+                    push(fn_arr, parse_fn_hw(p, hw));
                     nf = nf + 1;
                 } else {
                     push(top_arr, parse_stmt_body(p, hw));

@@ -1,0 +1,25 @@
+// Hardware-placement tags — this program should COMPILE.
+//
+// An @gpu fn body is a GPU context (same rules as a gpu { } block): no
+// tensor@cpu values and no CPU-only I/O. An @cpu fn body runs on the CPU
+// and may use anything that is legal outside a gpu block.
+
+@cpu fn scale(int64 n) -> int64 {
+    // CPU context: I/O (print) and ordinary compute are both fine here.
+    print("scaling on the cpu");
+    return n * 2;
+}
+
+@gpu fn step(tensor@gpu w) -> tensor@gpu {
+    // GPU context: only tensor@gpu compute — no print, no CPU-only calls.
+    return w;
+}
+
+@gpu(0.5) fn half_step(tensor@gpu w) -> tensor@gpu {
+    return w;
+}
+
+fn main() -> int64 {
+    print(int64_to_str(scale(21)));   // @cpu fn, called from CPU context
+    return 0;
+}

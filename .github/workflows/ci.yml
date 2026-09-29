@@ -95,3 +95,35 @@ jobs:
           ./ionic_new examples/stdlib_test.ionic -o /tmp/stdlib_test2
           /tmp/stdlib_test2 | grep -q "arr_sum = 100" || (echo "arr_sum check failed"; exit 1)
           /tmp/stdlib_test2 | grep -q "contains: ok"  || (echo "contains check failed"; exit 1)
+
+      - name: Smoke test — global/param shadowing in recursion (self-hosted)
+        run: |
+          # Regression: a top-level `let n = <int>` becomes an inlined
+          # compile-time constant. A function parameter of the same name must
+          # still shadow it, or `rec(n - 1)` reads the constant forever and the
+          # recursion guard never fires (stack-overflow / SIGSEGV).
+          cat > /tmp/shadow.ionic << 'EOF'
+          let n = 10;
+          fn rec(int64 n) -> int64 { if (n <= 1) { return 1; } return rec(n - 1); }
+          print(rec(5));
+          EOF
+          ./ionic_new /tmp/shadow.ionic -o /tmp/shadow
+          output=$(/tmp/shadow)
+          [ "$output" = "1" ] || (echo "Expected '1', got '$output'"; exit 1)
+
+      # ── Hardware-placement tags (@gpu fn / @cpu fn) ──────────────────────
+      # An @gpu fn body must be checked as GPU context (same rules as a
+      # gpu { } block): CPU-only I/O and tensor@cpu values are rejected, and
+      # @cpu functions may not be called from it.
+      - name: Hardware tags — @gpu/@cpu fn accepted (self-hosted compiler)
+        run: |
+          ./ionic_new examples/hw_tags.ionic -o /tmp/hw_tags
+          /tmp/hw_tags | grep -q "42" || (echo "hw_tags run check failed"; exit 1)
+
+      - name: Hardware tags — @gpu fn violations rejected (self-hosted compiler)
+        run: |
+          if ./ionic_new examples/hw_tag_error.ionic -o /tmp/hw_tag_err 2>/dev/null; then
+            echo "Expected hw_tag_error.ionic to be rejected, but it compiled"; exit 1
+          fi
+          ./ionic_new examples/hw_tag_error.ionic -o /tmp/hw_tag_err 2>&1 \
+            | grep -q "CPU-only I/O" || (echo "missing GPU-context diagnostic"; exit 1)

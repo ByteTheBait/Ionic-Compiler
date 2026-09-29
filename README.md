@@ -40,7 +40,7 @@ fib(10) = 55
 - **Import system** — `import std.math.*;` and selective `import std.str.{contains, trim};` pull in standard-library modules transitively with dedup
 - **Standard library** — `std.math`, `std.str`, `std.array`, `std.io`, `std.data`, `std.text`, `std.http` live under `lib/std/`
 - **Web request primitives** — `http_get`, `http_post`, `http_status`, `http_body`, `http_urlencode` (HTTP/1.1 client via raw sockets, no TLS) plus a `std.http` wrapper module
-- **Hardware-aware types** — `tensor@cpu` and `tensor@gpu` prevent accidental cross-device ops
+- **Hardware-aware types & placement tags** — `tensor@cpu` and `tensor@gpu` are distinct types; `@gpu fn` / `@cpu fn` pin code to a device, and the checker enforces the boundary (no accidental cross-device ops, no CPU-only I/O inside GPU code)
 - **Real ML backends** — GGUF models via llama.cpp with Metal GPU; ONNX/CoreML; Piper TTS
 - **Human-readable errors** — multi-error reporting, source-line carets, column tracking, panic-mode recovery, enclosing-function context, "did you mean…" suggestions, clickable `path:line:col` jump links, ANSI colors that auto-disable when not a TTY
 - **Optimizer** — a self-hosted optimization pipeline (fold, inline, unroll, const-propagate) that runs on every compilation before codegen
@@ -102,14 +102,27 @@ next-stage work for fully source-only cross-OS builds.
 
 ### Verifying the self-hosted compiler
 
+The compiler is reproducible at the object level: compiling the same
+sources twice yields byte-identical `.o` files. The final linked
+executable, however, always differs by a few dozen bytes because `ld`
+stamps a random `LC_UUID` (and an ad-hoc code signature over it) into
+every Mach-O — so a naive `cmp` of two *linked binaries* can never match.
+
+To check self-hosting correctness, compare the compiler's emitted object
+output, not the linked executable:
+
 ```sh
-./build.sh --verify-self-hosting           # rebuild ionic_new, then rebuild itself, then cmp -s
+./build.sh                          # ionic_self → ./ionic_new
+./ionic_new src/**/*.ionic ... -o /tmp/a   # build the compiler
+cp /tmp/_ionic_native.o /tmp/a.o
+./ionic_new src/**/*.ionic ... -o /tmp/b
+cp /tmp/_ionic_native.o /tmp/b.o
+cmp -s /tmp/a.o /tmp/b.o && echo "reproducible" || echo "DIFFERS"
 ```
 
-Rebuilds `ionic_new` using `ionic_self`, then runs `ionic_new` to
-rebuild itself into a temp file and `cmp -s` compares. Exits 0 on
-byte-identical, 1 otherwise. Catches determinism bugs and self-hosting
-regressions in one shot.
+The build step on its own is enough to produce a working `./ionic_new`
+tarball; releases ship that binary, and end users use it to compile their
+own programs.
 
 ---
 
@@ -257,6 +270,43 @@ x /= 4;    // 6
 /* line one
    line two */
 let y = 1 + 2;   // 3
+```
+
+### Hardware placement
+
+Tensors carry their device in the type: `tensor@cpu` and `tensor@gpu` are
+distinct, and crossing between them requires an explicit transfer.
+
+```ionic
+let weights: tensor@gpu = load_model("model.onnx").forward(inputs);
+let inputs:  tensor@cpu = load_batch(path);
+
+let inputs_gpu = inputs.toGpu();   // explicit CPU → GPU transfer
+```
+
+`gpu { ... }` is a GPU-context block. Inside it the checker only allows
+`tensor@gpu` values and tensor compute — using a `tensor@cpu` or calling CPU
+I/O (`print`, `file_read`, `file_write`, …) is a compile error:
+
+```ionic
+gpu {
+    let prediction = forward(inputs_gpu, weights);   // ok
+    // print("hi");                                  // error: CPU-only I/O
+}
+```
+
+Functions can be pinned to a device with a leading tag. An `@gpu fn` body is
+checked as a GPU context (same rules as a `gpu { }` block); `@cpu fn` bodies
+run on the CPU. A function tag and a contradicting parameter tag
+(`@gpu fn f(@cpu tensor@cpu x)`) is rejected, as is calling an `@cpu fn` from
+GPU code:
+
+```ionic
+@cpu fn load_batch(string path) -> tensor@cpu { ... }   // runs on the CPU
+@gpu fn train_step(tensor@gpu x, tensor@gpu w) -> tensor@gpu {
+    return forward(x, w);   // no print / CPU-only calls allowed here
+}
+@gpu(0.5) fn half(...) -> ... { ... }                    // use 50% of the GPU
 ```
 
 ### Imports & the standard library

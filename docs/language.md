@@ -115,6 +115,17 @@ gpu {
 }
 ```
 
+An `@gpu fn` body is itself a GPU context: it is checked with the same rules
+as a `gpu { ... }` block. Inside it,
+
+- `tensor@cpu` values are rejected (use `.toGpu()` first),
+- CPU-only I/O (`print`, `file_read`, `file_write`, …) is rejected,
+- calling an `@cpu`-annotated function is rejected.
+
+A parameter annotated with a placement that contradicts its function
+(`@gpu fn f(@cpu tensor@cpu x)`) is also rejected — no call site could ever
+satisfy it. `@cpu fn` bodies and unannotated functions run in CPU context.
+
 `.toGpu()` and `.toCpu()` convert tensors between hardware domains.
 
 ---

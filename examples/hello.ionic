@@ -1,5 +1,5 @@
 // Hello World in AIL
-let message = "Hello from AIL!";
+let message = "Hello from Ionic Compiler!";
 print(message);
 
 let x = 42;

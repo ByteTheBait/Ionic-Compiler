@@ -278,6 +278,7 @@ mut fn_ret_tys = [0];
 mut fn_ret_svs = [""];
 mut fn_pcounts = [0];
 mut fn_pstarts = [0];
+mut fn_hws     = [0];   // hw annotation node per fn (0 = none) — for @cpu/@gpu checks
 mut fn_count   = 0;
 // Flat param table
 mut fp_tys   = [0];
@@ -480,6 +481,26 @@ fn tensor_convert_hint(int64 got, int64 want) -> string {
     return "";
 }
 
+// hw_node is an ND_HW annotation node (from @gpu / @cpu / @gpu(f) / @cpu(f)),
+// or 0 when the declaration carried no placement annotation.
+fn hw_ann_is_gpu(int64 hw_node) -> bool {
+    if (hw_node == 0) { return false; }
+    let v = nd_iv[hw_node];
+    return v == HW_GPU || v == HW_GPU_FRAC;
+}
+
+fn hw_ann_is_cpu(int64 hw_node) -> bool {
+    if (hw_node == 0) { return false; }
+    let v = nd_iv[hw_node];
+    return v == HW_CPU || v == HW_CPU_FRAC;
+}
+
+fn hw_ann_name(int64 hw_node) -> string {
+    if (hw_ann_is_gpu(hw_node)) { return "@gpu"; }
+    if (hw_ann_is_cpu(hw_node)) { return "@cpu"; }
+    return "";
+}
+
 // Functions that access CPU state and are banned inside gpu {} blocks
 fn is_cpu_only_fn(string name) -> bool {
     if (str_eq(name, "print"))          { return true; }
@@ -545,15 +566,18 @@ fn register_fn_node(int64 node) -> int64 {
     mut ret_ty = TY_VOID;
     mut ret_sv = "";
     if (ret_ty_nd != 0) { ret_ty = node_ty_to_int(ret_ty_nd); ret_sv = node_ty_sv(ret_ty_nd); }
+    let hw_node = nd_i5[node];
     fn_count = fn_count + 1;
     if (fn_count < len(fn_names)) {
         fn_names[fn_count]   = name;
         fn_ret_tys[fn_count] = ret_ty;
         fn_ret_svs[fn_count] = ret_sv;
+        fn_hws[fn_count]     = hw_node;
     } else {
         push(fn_names,   name);
         push(fn_ret_tys, ret_ty);
         push(fn_ret_svs, ret_sv);
+        push(fn_hws,     hw_node);
     }
     let pstart = fp_count + 1;
     if (fn_count < len(fn_pstarts)) { fn_pstarts[fn_count] = pstart; }
@@ -589,11 +613,13 @@ fn register_builtin(string name, int64 pcount, int64 ret_ty, string ret_sv) -> i
         fn_ret_tys[fn_count] = ret_ty;
         fn_ret_svs[fn_count] = ret_sv;
         fn_pcounts[fn_count] = pcount;
+        fn_hws[fn_count]     = 0;
     } else {
         push(fn_names,   name);
         push(fn_ret_tys, ret_ty);
         push(fn_ret_svs, ret_sv);
         push(fn_pcounts, pcount);
+        push(fn_hws,     0);
     }
     let pstart = fp_count + 1;
     if (fn_count < len(fn_pstarts)) { fn_pstarts[fn_count] = pstart; }
@@ -806,6 +832,12 @@ fn sc_expr(int64 node) -> int64 {
             sc_error_at(str_concat("unknown function '", str_concat(callee, "'")), "not declared");
             sc_hint_did_you_mean("function", suggest_fn(callee));
             sc_ty = TY_UNKNOWN; sc_sv = ""; return 0;
+        }
+
+        // A @cpu-annotated function cannot run inside a GPU context.
+        if (sc_in_gpu_block == 1 && hw_ann_is_cpu(fn_hws[fi])) {
+            sc_error_at(str_concat("@cpu function '", str_concat(callee, "'")),
+                "cannot be called from a GPU context (gpu block or @gpu fn)");
         }
 
         let want_argc = fn_pcounts[fi];
@@ -1140,11 +1172,14 @@ fn sc_stmt(int64 node) -> int64 {
     }
 
     if (k == ND_GPU_BLOCK) {
+        // Save/restore so a gpu { } nested inside an @gpu fn does not drop the
+        // enclosing function's GPU context on exit.
+        let saved_gpu = sc_in_gpu_block;
         sc_in_gpu_block = 1;
         sv_push_frame();
         sc_block_stmts(nd_i2[node]);
         sv_pop_frame();
-        sc_in_gpu_block = 0;
+        sc_in_gpu_block = saved_gpu;
         return 0;
     }
 
@@ -1164,12 +1199,22 @@ fn sc_fn(int64 fn_node) -> int64 {
     mut ret_ty = TY_VOID; mut ret_sv_val = "";
     if (ret_ty_nd != 0) { ret_ty = node_ty_to_int(ret_ty_nd); ret_sv_val = node_ty_sv(ret_ty_nd); }
 
+    // A leading @gpu on the fn header makes the whole body GPU context —
+    // tensor@cpu references become errors and CPU-only I/O is banned, exactly
+    // like a `gpu { ... }` block. @cpu / no annotation leave the body in CPU
+    // context. The annotation node lives in the spare nd_i5 slot.
+    let fn_hw      = nd_i5[fn_node];
+    let fn_is_gpu  = hw_ann_is_gpu(fn_hw);
+    let fn_is_cpu  = hw_ann_is_cpu(fn_hw);
+
     let saved_fn   = sc_cur_fn_name;
     let saved_rty  = sc_cur_fn_ret_ty;
     let saved_rsv  = sc_cur_fn_ret_sv;
+    let saved_gpu  = sc_in_gpu_block;
     sc_cur_fn_name   = name;
     sc_cur_fn_ret_ty = ret_ty;
     sc_cur_fn_ret_sv = ret_sv_val;
+    if (fn_is_gpu) { sc_in_gpu_block = 1; }
 
     // Push enclosing-fn diagnostic context so errors inside this body
     // show "    in fn name(...) -> ret_ty {" above the source line.
@@ -1187,6 +1232,19 @@ fn sc_fn(int64 fn_node) -> int64 {
         let pname = nd_sv[param];
         let pty   = node_ty_to_int(nd_i2[param]);
         let ptsv  = node_ty_val_sv(nd_i2[param]);
+        // A per-parameter placement that contradicts the function's placement
+        // can never be satisfied at any call site — reject it outright.
+        let p_hw = nd_i4[param];
+        if (fn_is_gpu && hw_ann_is_cpu(p_hw)) {
+            sc_active_node = param;
+            sc_error_at(str_concat("@gpu fn '", str_concat(name, "'")),
+                str_concat("parameter '", str_concat(pname, "' is annotated @cpu (remove one annotation)")));
+        }
+        if (fn_is_cpu && hw_ann_is_gpu(p_hw)) {
+            sc_active_node = param;
+            sc_error_at(str_concat("@cpu fn '", str_concat(name, "'")),
+                str_concat("parameter '", str_concat(pname, "' is annotated @gpu (remove one annotation)")));
+        }
         sv_declare(pname, pty, ptsv, 0);
         pnode = nd_i3[pnode];
     }
@@ -1197,6 +1255,7 @@ fn sc_fn(int64 fn_node) -> int64 {
     sc_cur_fn_name   = saved_fn;
     sc_cur_fn_ret_ty = saved_rty;
     sc_cur_fn_ret_sv = saved_rsv;
+    sc_in_gpu_block  = saved_gpu;
     return 0;
 }
 

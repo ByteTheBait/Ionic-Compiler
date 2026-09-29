@@ -84,6 +84,7 @@ mut nd_iv   = [0];
 mut nd_i2   = [0];
 mut nd_i3   = [0];
 mut nd_i4   = [0];
+mut nd_i5   = [0];   // spare slot (fn hw annotation: HW_NONE/HW_CPU/HW_GPU/…)
 mut nd_line = [0];   // source line for each node
 mut nd_col  = [0];   // source column for each node
 
@@ -97,6 +98,7 @@ fn new_node(int64 kind, string sv, int64 iv, int64 i2, int64 i3, int64 i4) -> in
     push(nd_i2,   i2);
     push(nd_i3,   i3);
     push(nd_i4,   i4);
+    push(nd_i5,   0);
     push(nd_line, g_cur_line);
     push(nd_col,  g_cur_col);
     return len(nd_kind) - 1;

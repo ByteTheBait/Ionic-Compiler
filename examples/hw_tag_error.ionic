@@ -1,0 +1,13 @@
+// This should FAIL — an @gpu fn body is a GPU context, so CPU-only I/O
+// (print) and tensor@cpu values are rejected, exactly as inside a gpu block.
+
+@cpu fn load() -> int64 {
+    return 1;
+}
+
+@gpu fn step(tensor@gpu x) -> tensor@gpu {
+    print("side effects are not allowed on the GPU");
+    let n = load();            // @cpu fn called from a GPU context
+    let leak: tensor@cpu = x.toCpu();   // tensor@cpu value inside GPU context
+    return x;
+}

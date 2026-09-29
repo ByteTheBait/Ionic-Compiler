@@ -783,16 +783,12 @@ fn ncg_expr(int64 node) -> int64 {
         let name = nd_sv[node];
         ncg_last_stype = "";  // reset before early returns; overridden for struct-typed locals below
 
-        // 1. Check compile-time constant table (top-level let X = integer_literal)
-        let cki = ncg_const_find(name);
-        if (cki >= 0) {
-            let r = scratch_push();
-            a64_load_imm(r, const_vals[cki]);
-            return r;
-        }
-
-        // 2. Check local variable (function-scope) — must be before globals so that
-        //    function parameters shadow top-level globals with the same name.
+        // 1. Check local variable (function-scope) FIRST so that function
+        //    parameters and inner bindings shadow top-level globals AND
+        //    top-level compile-time constants with the same name. (If the
+        //    constant table were consulted first, a fn param named like a
+        //    top-level `let n = 10` would always read the constant 10,
+        //    breaking recursion guards like `if (n <= 1)`.)
         let slot = local_find(name);
         if (slot >= 0) {
             let r = scratch_push();
@@ -817,6 +813,14 @@ fn ncg_expr(int64 node) -> int64 {
                 text_u32(0x9E670000 | (r << 5) | r);  // FMOV D{r}, X{r}
                 ncg_last_ty = 2;
             }
+            return r;
+        }
+
+        // 2. Check compile-time constant table (top-level let X = integer_literal)
+        let cki = ncg_const_find(name);
+        if (cki >= 0) {
+            let r = scratch_push();
+            a64_load_imm(r, const_vals[cki]);
             return r;
         }
 
