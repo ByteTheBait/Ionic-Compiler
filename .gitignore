@@ -37,5 +37,8 @@
 *.swp
 *.swo
 
+# Agent task-tracking scratch files
+.nanocoder/
+
 # After publishing one model, no more
 models/
