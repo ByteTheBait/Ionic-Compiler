@@ -2,6 +2,7 @@
 //
 // Single-pass bottom-up tree rewriter. Runs after semantic check, before codegen.
 // Mutates the AST node arrays in-place; expression rewrites return new node indices.
+import "../parser/ast.ionic";   // ND_* node kinds, nd_* node tables
 
 // ─── Integer constant folding ─────────────────────────────────────────────────
 

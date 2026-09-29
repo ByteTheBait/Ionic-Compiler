@@ -28,6 +28,7 @@
 #  include <windows.h>
 #else
 #  include <unistd.h>
+#  include <time.h>
 #endif
 
 /* ── ONNX Runtime ─────────────────────────────────────────────────────────── */
@@ -328,7 +329,13 @@ int64_t ionic_str_len(const char *s) {
 }
 
 int64_t ionic_str_index(const char *s, int64_t i) {
-    if (!s || i < 0 || i >= (int64_t)strlen(s)) return 0;
+    /* O(1): do NOT strlen(s) here. This is called once per character by the
+     * lexer and by line/offset scans; computing strlen on every call turned
+     * those scans into O(n^2). Callers guard i against the string length
+     * before calling (lx_peek does `pos >= slen`; diag_* loop `i < n`), so
+     * only `i == len` (the NUL terminator) can ever be read here — which
+     * returns 0, exactly as the previous bounds-checked version did. */
+    if (!s || i < 0) return 0;
     return (int64_t)(unsigned char)s[i];
 }
 

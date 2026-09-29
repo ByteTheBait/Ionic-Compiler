@@ -1,4 +1,6 @@
 // ── Token descriptions (for human-readable parse errors) ─────────────────────
+import "lexer/tokens.ionic";   // TOK_* constants
+
 fn tok_desc(int64 kind) -> string {
     if (kind == TOK_SEMI)     { return "';'"; }
     if (kind == TOK_LPAREN)   { return "'('"; }

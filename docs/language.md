@@ -138,6 +138,23 @@ import std.str.{contains, trim};      // named — exactly these two symbols
 import std.io;                        // module — all symbols (same as glob for now)
 ```
 
+Dotted paths resolve against project-local packages (`.ionic/packages/`),
+then user-central (`$HOME/.ionic/packages/`), then the bundled stdlib
+(`lib/`, only for the `std.` prefix).
+
+String-literal (path) imports resolve against the directory of the importing
+file — the mechanism the compiler uses to assemble its own source tree from a
+single entry point:
+
+```ionic
+import "imports.ionic";            // same directory as this file
+import "lexer/tokens.ionic";       // subdirectory
+import "../diagnostics.ionic";     // parent directory
+```
+
+`.` and `..` are collapsed during resolution so a module reached by two
+different paths is loaded exactly once.
+
 **Selective compilation:** when using wildcards, the compiler walks the AST and determines which library symbols are actually referenced — including transitive dependencies — and only emits IR for those. Unused library functions add zero overhead.
 
 ---

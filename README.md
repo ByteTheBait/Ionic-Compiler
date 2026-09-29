@@ -37,7 +37,7 @@ fib(10) = 55
 - **Full float64 support** — arithmetic, `sqrt`, `pow`, `floor`, `ceil`, `fabs`, `int64_to_float64`, `float64_to_str`
 - **Rich string builtins** — `format`, `str_concat`, `str_len`, `str_slice`, `str_replace`, `str_contains`, `str_starts_with`, `str_ends_with`, `int64_to_str`
 - **Arrays** — `[int64]`/`[float64]`/`[string]` types, `.push`, `.len`, `arr_reset`, indexing and element assignment; element types are tracked through the checker
-- **Import system** — `import std.math.*;` and selective `import std.str.{contains, trim};` pull in standard-library modules transitively with dedup
+- **Import system** — `import std.math.*;` and selective `import std.str.{contains, trim};` pull in standard-library modules transitively with dedup; string-literal imports (`import "lexer/tokens.ionic";`) resolve relative to the importing file, and the compiler builds itself from a single entry point (`src/main.ionic`)
 - **Standard library** — `std.math`, `std.str`, `std.array`, `std.io`, `std.data`, `std.text`, `std.http` live under `lib/std/`
 - **Web request primitives** — `http_get`, `http_post`, `http_status`, `http_body`, `http_urlencode` (HTTP/1.1 client via raw sockets, no TLS) plus a `std.http` wrapper module
 - **Hardware-aware types & placement tags** — `tensor@cpu` and `tensor@gpu` are distinct types; `@gpu fn` / `@cpu fn` pin code to a device, and the checker enforces the boundary (no accidental cross-device ops, no CPU-only I/O inside GPU code)
@@ -108,14 +108,22 @@ executable, however, always differs by a few dozen bytes because `ld`
 stamps a random `LC_UUID` (and an ad-hoc code signature over it) into
 every Mach-O — so a naive `cmp` of two *linked binaries* can never match.
 
-To check self-hosting correctness, compare the compiler's emitted object
-output, not the linked executable:
+`build.sh --verify-self-hosting` handles this for you: it builds
+`ionic_new`, then has the freshly-built compiler recompile the same
+sources and compares the two **object files** (not the linked binaries).
 
 ```sh
-./build.sh                          # ionic_self → ./ionic_new
-./ionic_new src/**/*.ionic ... -o /tmp/a   # build the compiler
+./build.sh --verify-self-hosting   # ✓ object files byte-identical
+```
+
+If you prefer to do it by hand, compare the compiler's emitted object
+output rather than the executable:
+
+```sh
+./build.sh                               # ionic_self → ./ionic_new
+./ionic_self src/main.ionic -o /tmp/a    # bootstrap's object
 cp /tmp/_ionic_native.o /tmp/a.o
-./ionic_new src/**/*.ionic ... -o /tmp/b
+./ionic_new  src/main.ionic -o /tmp/b    # self-hosted object
 cp /tmp/_ionic_native.o /tmp/b.o
 cmp -s /tmp/a.o /tmp/b.o && echo "reproducible" || echo "DIFFERS"
 ```
@@ -341,6 +349,22 @@ the dependents that need them.
 
 Layer 3 is intentionally restricted to the `std.` prefix so user packages can
 never accidentally shadow or pretend to be a built-in module.
+
+#### Relative (path) imports
+
+The compiler is itself assembled from a tree of modules via string-literal
+imports, which resolve against the directory of the *importing* file:
+
+```ionic
+import "imports.ionic";            // same directory
+import "lexer/tokens.ionic";       // subdirectory
+import "../diagnostics.ionic";     // parent directory
+```
+
+`.` and `..` segments are collapsed during resolution, so a module reached by
+two different paths (a "diamond" import) is loaded exactly once. This is what
+lets `build.sh` compile the whole compiler from the single entry file
+`src/main.ionic` — the include order lives in the source, not the build script.
 
 #### Layer-1 example
 

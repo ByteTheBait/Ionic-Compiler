@@ -1,4 +1,7 @@
 // ── Lexer ────────────────────────────────────────────────────────────────────
+import "tokens.ionic";           // TOK_* / CH_* constants
+import "../diagnostics.ionic";   // print_span (bad-char recovery)
+
 struct Lexer {
     src:  string,
     slen: int64,

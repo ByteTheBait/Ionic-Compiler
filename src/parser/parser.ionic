@@ -1,4 +1,8 @@
 // ── Parser state ─────────────────────────────────────────────────────────────
+import "ast.ionic";              // ND_* node kinds, new_node/cons/build_list
+import "../lexer/lexer.ionic";   // g_tok_* token tables
+import "../diagnostics.ionic";   // print_span, tok_desc
+
 struct Parser {
     pos: int64
 }

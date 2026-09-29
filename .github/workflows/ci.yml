@@ -70,6 +70,12 @@ jobs:
       - name: Build self-hosted compiler
         run: ./build.sh
 
+      # The bootstrap binary and the freshly self-hosted compiler must emit an
+      # identical object file for the same sources. Compares .o, not the linked
+      # binary (the linker always stamps a fresh LC_UUID + code signature).
+      - name: Verify self-hosting (object files byte-identical)
+        run: ./build.sh --verify-self-hosting
+
       - name: Smoke test — hello world (self-hosted compiler)
         run: |
           echo 'fn main() -> int64 { print("ok"); return 0; }' > /tmp/hi2.ionic

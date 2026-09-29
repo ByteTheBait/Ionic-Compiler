@@ -6,10 +6,14 @@
 #                                       (the committed bootstrap binary that
 #                                        ships with the repo). Works on any
 #                                        OS without any toolchain installed.
-#   ./build.sh --verify-self-hosting — build ionic_new, then verify it
-#                                       rebuilds itself byte-for-byte (catches
-#                                       regressions in the self-hosted code
-#                                       path). Exits 0 on match, 1 otherwise.
+#   ./build.sh --verify-self-hosting — build ionic_new, then confirm that
+#                                       ./ionic_self and the freshly-built
+#                                       self-hosted compiler emit an identical
+#                                       object file for the same sources.
+#                                       Compares .o (not the linked binary,
+#                                       which the linker always stamps with a
+#                                       fresh UUID/signature). Exits 0 on
+#                                       match, 1 otherwise.
 #   IONIC=./some_binary ./build.sh   — use a specific Ionic binary instead of
 #                                       the default ./ionic_self
 #
@@ -30,33 +34,31 @@ set -e
 IONIC="${IONIC:-./ionic_self}"
 OUT="${OUT:-ionic_new}"
 
-SOURCES="
-  src/lexer/tokens.ionic
-  src/lexer/lexer.ionic
-  src/diagnostics.ionic
-  src/parser/ast.ionic
-  src/parser/parser.ionic
-  src/imports.ionic
-  src/semantic/checker.ionic
-  src/opt/opt.ionic
-  src/codegen/native.ionic
-  src/codegen/elf.ionic
-  src/main.ionic
-"
+# Single entry point. Its `import "..."` statements pull in the rest of the
+# tree (resolved relative to src/) and splice the modules in dependency order,
+# so the source order lives in the code instead of here in the build script.
+SOURCES="src/main.ionic"
 
 # ── Mode: build then verify self-hosting ────────────────────────────────────
-# First build ionic_new via whatever IONIC points at (default: ionic_self),
-# then run ionic_new to rebuild itself into a temp file and `cmp -s` compare.
-# Exits non-zero if the second build differs — catches determinism bugs and
-# self-hosting regressions in one shot.
+# The compiler emits its object to a fixed path (/tmp/_ionic_native.o), then
+# shells out to `clang` to link it. Comparing the *linked binaries* can never
+# match: the linker stamps each output with a fresh LC_UUID and an ad-hoc
+# LC_CODE_SIGNATURE, so byte-identity is impossible even for identical input.
+# We therefore compare the compiler-generated .o files, which ARE deterministic
+# and are exactly what this project owns.
+#
+#   1. $IONIC compiles the sources → capture its .o as A
+#   2. $OUT (freshly built) compiles the same sources → capture its .o as B
+#   3. A must equal B: the bootstrap and the self-hosted compiler agree.
 if [ "$1" = "--verify-self-hosting" ]; then
     echo "==> Building $OUT from split source using $IONIC..."
     $IONIC $SOURCES -o "$OUT"
-    echo "==> Verifying self-hosting: $OUT rebuilds itself byte-identical..."
-    cp "$OUT" /tmp/_ionic_verify_a
-    ./"$OUT" $SOURCES -o /tmp/_ionic_verify_b
+    cp /tmp/_ionic_native.o /tmp/_ionic_verify_a
+    echo "==> Verifying self-hosting: $OUT emits an identical object file..."
+    ./"$OUT" $SOURCES -o /tmp/_ionic_verify_b.bin
+    cp /tmp/_ionic_native.o /tmp/_ionic_verify_b
     if cmp -s /tmp/_ionic_verify_a /tmp/_ionic_verify_b; then
-        echo "    ✓ byte-identical"
+        echo "    ✓ object files byte-identical ($(wc -c < /tmp/_ionic_verify_a | tr -d ' ') bytes)"
     else
         echo "    ✗ DIFFER — self-hosting is BROKEN"
         echo "    Run: diff <(xxd /tmp/_ionic_verify_a) <(xxd /tmp/_ionic_verify_b) | head"

@@ -1,8 +1,8 @@
 // ── ELF/Linux ARM64 object file writer ────────────────────────────────────────
 // Emits an ELF64 relocatable object (.o) for Linux ARM64 from the shared
 // codegen buffers (text_buf / data_buf / glob_buf / sym_buf / strtab_buf /
-// reloc_buf). All globals used here are defined in src/codegen/native.ionic
-// which is compiled first in build.sh.
+// reloc_buf), all of which are defined in native.ionic.
+import "native.ionic";   // shared codegen buffers + emitters
 //
 // ELF64 header layout, section header table, and .rela.text format follow the
 // standard ABI for AArch64. Uses R_AARCH64_* relocation types for the same

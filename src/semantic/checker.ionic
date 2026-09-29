@@ -1,7 +1,7 @@
 // ── Semantic checker ─────────────────────────────────────────────────────────
-// Depends on: lexer/tokens.ionic, lexer/lexer.ionic, parser/ast.ionic,
-//             parser/parser.ionic (must be concatenated before this file)
 // Provides: TY_* type constants, sc_program(), sc_error_count, sc_errors[]
+import "../parser/ast.ionic";         // ND_* node kinds, nd_* node tables
+import "../diagnostics.ionic";        // print_span, diag_line_start/extract_line
 
 // ── Type integer constants ───────────────────────────────────────────────────
 let TY_VOID       = 0;

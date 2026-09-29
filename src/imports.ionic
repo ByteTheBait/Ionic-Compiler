@@ -1,4 +1,6 @@
 // ── Import resolution ────────────────────────────────────────────────────────
+import "lexer/tokens.ionic";   // CH_* character constants
+
 // Resolves `import` statements at compile time by loading sources from one
 // of three locations (first match wins):
 //
@@ -202,6 +204,100 @@ fn imp_try_read(string path) -> string {
     return file_read(path);
 }
 
+// ── Relative-path imports ────────────────────────────────────────────────────
+// `import "codegen/native.ionic";` (string literal) resolves against the
+// directory of the file containing the import, so a tree of sources can
+// reference siblings with real paths instead of the flat dotted stdlib form.
+// g_imp_dir is the directory of the file currently being expanded; it is
+// saved/restored around each recursive expansion so nested imports resolve
+// relative to their own file.
+
+mut g_imp_dir = ".";
+
+// Directory portion of a path ("a/b/c.ionic" -> "a/b"; "c.ionic" -> ".").
+fn imp_dir_of(string path) -> string {
+    let n = str_len(path);
+    mut last = -1;
+    mut i = 0;
+    while (i < n) {
+        if (str_index(path, i) == CH_SLASH) { last = i; }
+        i = i + 1;
+    }
+    if (last < 0) { return "."; }
+    if (last == 0) { return "/"; }
+    return str_slice(path, 0, last);
+}
+
+// Join a directory and a relative path. An absolute rel passes through.
+fn imp_join(string dir, string rel) -> string {
+    if (str_len(rel) > 0 && str_index(rel, 0) == CH_SLASH) { return rel; }
+    if (str_eq(dir, "") || str_eq(dir, ".")) { return rel; }
+    return str_concat(dir, str_concat("/", rel));
+}
+
+// Normalize a path: collapse "." and ".." segments so that dedup keys are
+// canonical ("src/parser/../lexer/tokens.ionic" -> "src/lexer/tokens.ionic").
+// This keeps a diamond import from loading the same file twice under two keys.
+fn imp_norm(string path) -> string {
+    let n = str_len(path);
+    // Absolute? remember a leading '/'.
+    mut abs = 0;
+    if (n > 0 && str_index(path, 0) == CH_SLASH) { abs = 1; }
+    mut out = "";       // accumulated canonical segments (no leading slash)
+    mut i = 0;
+    while (i < n) {
+        // read one segment [i, j)
+        let j0 = i;
+        mut j = i;
+        while (j < n && str_index(path, j) != CH_SLASH) { j = j + 1; }
+        let seg = str_slice(path, j0, j);
+        if (str_eq(seg, "") || str_eq(seg, ".")) {
+            // skip empty + "."
+        } else if (str_eq(seg, "..")) {
+            out = imp_drop_last_seg(out);
+        } else {
+            if (str_eq(out, "")) { out = seg; }
+            else { out = str_concat(out, str_concat("/", seg)); }
+        }
+        i = j + 1;
+    }
+    if (abs == 1) { return str_concat("/", out); }
+    if (str_eq(out, "")) { return "."; }
+    return out;
+}
+
+// Remove the final "seg" or "a/seg" component from a segment list.
+fn imp_drop_last_seg(string segs) -> string {
+    let n = str_len(segs);
+    mut last = -1;
+    mut i = 0;
+    while (i < n) {
+        if (str_index(segs, i) == CH_SLASH) { last = i; }
+        i = i + 1;
+    }
+    if (last < 0) { return ""; }
+    return str_slice(segs, 0, last);
+}
+
+// Resolve + expand a path-style (literal) import, relative to g_imp_dir.
+fn imp_resolve_rel(string rel) -> int64 {
+    let full = imp_norm(imp_join(g_imp_dir, rel));
+    if (imp_mod_loaded(full)) { return 0; }
+    imp_mod_mark(full);
+    let content = imp_try_read(full);
+    if (str_len(content) == 0) {
+        println(str_concat("ionic: cannot resolve import '",
+                str_concat(rel, "'")));
+        println(str_concat("  tried: ", full));
+        exit(1);
+    }
+    let saved = g_imp_dir;
+    g_imp_dir = imp_dir_of(full);
+    imp_expand(content);
+    g_imp_dir = saved;
+    return 0;
+}
+
 // Resolve a dotted module path against the three layers.  Loads + expands
 // the first match; prints a diagnostic + aborts via exit() if nothing matches.
 fn imp_resolve(string modpath) -> int64 {
@@ -301,25 +397,35 @@ fn imp_expand(string src) -> int64 {
         }
         if (is_imp == 1) {
             mut p = imp_skip_space(src, s0 + 6);
-            let e1 = imp_span_ident(src, p);
-            mut modpath = str_slice(src, p, e1);
-            p = e1;
-            mut done_p = 0;
-            while (done_p == 0 && p < nl) {
-                if (p + 1 < n && str_index(src, p) == 46) {   // CH_DOT
-                    let estart = p + 1;
-                    let eend = imp_span_ident(src, estart);
-                    if (eend > estart) {
-                        modpath = str_concat(modpath, str_concat(".", str_slice(src, estart, eend)));
-                        p = eend;
+            // Path-style import: `import "codegen/native.ionic";` — resolved
+            // relative to the importing file's directory.
+            if (p < n && str_index(src, p) == CH_QUOTE) {
+                let qstart = p + 1;
+                mut q = qstart;
+                while (q < n && str_index(src, q) != CH_QUOTE) { q = q + 1; }
+                let rel = str_slice(src, qstart, q);
+                imp_resolve_rel(rel);
+            } else {
+                let e1 = imp_span_ident(src, p);
+                mut modpath = str_slice(src, p, e1);
+                p = e1;
+                mut done_p = 0;
+                while (done_p == 0 && p < nl) {
+                    if (p + 1 < n && str_index(src, p) == 46) {   // CH_DOT
+                        let estart = p + 1;
+                        let eend = imp_span_ident(src, estart);
+                        if (eend > estart) {
+                            modpath = str_concat(modpath, str_concat(".", str_slice(src, estart, eend)));
+                            p = eend;
+                        } else {
+                            done_p = 1;
+                        }
                     } else {
                         done_p = 1;
                     }
-                } else {
-                    done_p = 1;
                 }
+                imp_resolve(modpath);
             }
-            imp_resolve(modpath);
         } else {
             acc = str_concat(acc, str_concat(str_slice(src, pos, nl), "\n"));
         }
@@ -335,5 +441,6 @@ fn imp_reset() -> int64 {
     g_part_cnt = 0;
     g_mod_paths = [""];
     g_mod_count = 0;
+    g_imp_dir = ".";
     return 0;
 }

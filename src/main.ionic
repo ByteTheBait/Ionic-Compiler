@@ -1,8 +1,15 @@
 // ── Main driver ──────────────────────────────────────────────────────────────
+import "imports.ionic";            // imp_* import resolver, g_parts fragments
+import "parser/parser.ionic";      // Parser, parse_program, g_parse_error_count
+import "semantic/checker.ionic";   // sc_program, sc_error_count
+import "opt/opt.ionic";            // opt_program
+import "codegen/elf.ionic";        // codegen_program (native), write_elf
+
 mut ai        = 0;
 mut src_str   = "";
 mut out_name  = "a.out";
 mut src_path  = "<source>";   // populated when a file argument is given
+mut entry_path = "";          // first source file — seeds relative-import dir
 
 mut cur_arg = get_arg(ai);
 while (!str_eq(cur_arg, "")) {
@@ -13,6 +20,7 @@ while (!str_eq(cur_arg, "")) {
         let content = file_read(cur_arg);
         src_str = str_concat(src_str, str_concat(content, "\n"));
         src_path = cur_arg;
+        if (str_eq(entry_path, "")) { entry_path = cur_arg; }
     }
     ai = ai + 1;
     cur_arg = get_arg(ai);
@@ -20,7 +28,10 @@ while (!str_eq(cur_arg, "")) {
 
 // Expand `import` statements: splice in transitively imported library modules
 // and strip the import lines. g_parts holds fragments in dependency order.
+// Seed the import directory from the entry file so `import "..."` paths
+// resolve relative to where the source lives, not the process CWD.
 imp_reset();
+if (!str_eq(entry_path, "")) { g_imp_dir = imp_dir_of(entry_path); }
 imp_expand(src_str);
 mut combined = "";
 mut pi = 1;

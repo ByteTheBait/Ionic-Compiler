@@ -1,10 +1,10 @@
 // ── codegen.ionic ─────────────────────────────────────────────────────────────
 // ARM64 (AArch64) machine-code emitter + Mach-O relocatable object writer.
-// Integrated with compiler.ionic: shares the global node arrays (nd_kind, etc.)
-// and is concatenated with it at build time.
+// Produces a valid Mach-O .o file that `ld` can link into a native binary.
 //
 // Entry point: codegen_program(structs_list, fns_list, top_list, out_path)
-// Produces a valid Mach-O .o file that `ld` can link into a native binary.
+import "../parser/ast.ionic";       // ND_* node kinds, nd_* node tables
+import "../semantic/checker.ionic"; // st_*/fn_* struct + function registries
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Register numbers ─────────────────────────────────────────────────────────
