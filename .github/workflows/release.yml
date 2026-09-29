@@ -41,6 +41,15 @@ jobs:
           cp ionic_new "${STAGING}/ionic"
           cp README.md "${STAGING}/"
 
+          # Ship the runtime C source + the bundled standard library so the
+          # installed `ionic` can compile user programs from any directory.
+          # The binary locates these relative to itself via $IONIC_ROOT
+          # (the executable's own directory, published by the C runtime).
+          mkdir -p "${STAGING}/lib"
+          cp -R lib/. "${STAGING}/lib/"
+          mkdir -p "${STAGING}/src"
+          cp src/ionic_model_runtime.c "${STAGING}/src/"
+
           tar -czf "${STAGING}.tar.gz" "${STAGING}"
           echo "TARBALL=${STAGING}.tar.gz" >> "$GITHUB_ENV"
           echo "SHA256=$(shasum -a 256 "${STAGING}.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_ENV"

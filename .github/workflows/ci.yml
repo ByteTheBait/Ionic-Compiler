@@ -114,6 +114,40 @@ jobs:
           /tmp/stdlib_test2 | grep -q "arr_sum = 100" || (echo "arr_sum check failed"; exit 1)
           /tmp/stdlib_test2 | grep -q "contains: ok"  || (echo "contains check failed"; exit 1)
 
+      # ── Packaging: the released tarball must be standalone ───────────────
+      # Mirrors release.yml's packaging step, then extracts to a throwaway
+      # directory and compiles a program importing std.* from an unrelated
+      # CWD. This guards the exe-relative $IONIC_ROOT resolution: without the
+      # bundled lib/ and src/ionic_model_runtime.c, the installed binary would
+      # be unable to compile anything.
+      - name: Packaged tarball works standalone (exe-relative runtime + stdlib)
+        run: |
+          STAGE=/tmp/ionic-pkg/ionic-vTEST-aarch64-apple-darwin
+          rm -rf /tmp/ionic-pkg && mkdir -p "$STAGE/lib" "$STAGE/src"
+          cp ionic_new "$STAGE/ionic"
+          cp README.md "$STAGE/"
+          cp -R lib/. "$STAGE/lib/"
+          cp src/ionic_model_runtime.c "$STAGE/src/"
+          ( cd /tmp/ionic-pkg && tar -czf ionic-vTEST.tar.gz "$(basename $STAGE)" )
+          rm -rf /tmp/ionic-extract && mkdir /tmp/ionic-extract
+          tar -xzf /tmp/ionic-pkg/ionic-vTEST.tar.gz -C /tmp/ionic-extract
+          cat > /tmp/pkg_prog.ionic << 'EOF'
+          import std.math;
+          import std.str;
+          fn main() -> int64 {
+              println(str_concat("sqrt2=", float64_to_str(sqrt(2.0))));
+              println(str_concat("trim='", str_concat(trim("  hi  "), "'")));
+              return 0;
+          }
+          EOF
+          # Run from /tmp (NOT the repo root) so the repo-relative fallback can't help.
+          ( cd /tmp && /tmp/ionic-extract/ionic-vTEST-aarch64-apple-darwin/ionic \
+              /tmp/pkg_prog.ionic -o /tmp/pkg_prog )
+          out=$(/tmp/pkg_prog)
+          echo "$out"
+          echo "$out" | grep -q "sqrt2=1.41421" || (echo "stdlib math failed"; exit 1)
+          echo "$out" | grep -q "trim='hi'"    || (echo "stdlib str failed"; exit 1)
+
       - name: Smoke test — global/param shadowing in recursion (self-hosted)
         run: |
           # Regression: a top-level `let n = <int>` becomes an inlined

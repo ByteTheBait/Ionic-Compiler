@@ -1,7 +1,8 @@
 # Ionic
 
 A statically-typed, self-hosting compiled language targeting native ARM64 (macOS). Ionic compiles directly to Mach-O object files — no LLVM required at runtime — and enforces hardware placement at the type level: `tensor@cpu` and `tensor@gpu` are distinct types and the compiler rejects code that crosses the boundary without an explicit transfer.
-[~](assets/ionic_demo.gif)
+
+![~](assets/ionic_demo.gif)
 ```ionic
 fn fibonacci(int64 n) -> int64 {
     if (n <= 1) { return n; }
@@ -66,6 +67,27 @@ Two compilers live in the tree:
 A prebuilt **`ionic_self`** is checked in at the repo root — it's the
 binary version of `ionic_new` plus any updates since the last release.
 Most users (and CI) only need that.
+
+### Install from a release
+
+Released tarballs (`ionic-<version>-aarch64-apple-darwin.tar.gz`) are
+**self-contained**: the `ionic` binary carries the compiler, and the
+tarball ships the standard library and the C runtime source alongside it:
+
+```
+ionic-v0.2.1-aarch64-apple-darwin/
+├── ionic                       # the compiler
+├── lib/std/*.ionic             # bundled standard library
+└── src/ionic_model_runtime.c   # C runtime, linked into every program you build
+```
+
+At startup `ionic` publishes its own directory as `$IONIC_ROOT` (via the C
+runtime), so it finds `lib/` and `src/ionic_model_runtime.c` **relative to
+the executable** — you can run it from any working directory. Homebrew
+installs it the same way (`brew install ByteTheBait/ionic/ionic`).
+
+Because the runtime is compiled with `clang` at link time, building a
+program still needs a C compiler on `PATH`; nothing else is required.
 
 ### Prerequisites
 
@@ -346,9 +368,13 @@ following locations in order, taking the first match:
 1. `./.ionic/packages/<slash-form>.ionic` — project-local packages.
 2. `$HOME/.ionic/packages/<slash-form>.ionic` — user-central packages
    (falls back to `$USERPROFILE` for Windows-style installs).
-3. `lib/<slash-form>.ionic` — the built-in standard library, but **only when
-   the first segment is `std`**. Non-`std` paths that miss layers 1 and 2
-   are reported as errors with the full list of paths that were tried.
+3. The built-in standard library, but **only when the first segment is
+   `std`**. The compiler looks first in `$IONIC_ROOT/lib/<slash-form>.ionic`
+   (where `$IONIC_ROOT` is the compiler's own install directory, published by
+   the runtime at startup — so an installed binary works from any CWD), then
+   falls back to the repo-relative `lib/<slash-form>.ionic`. Non-`std` paths
+   that miss layers 1 and 2 are reported as errors with the full list of
+   paths that were tried.
 
 The dotted form `std.data.csv` is converted to slash form `std/data/csv` for
 the on-disk path, so packages are stored as a regular directory hierarchy

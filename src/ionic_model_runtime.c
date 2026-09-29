@@ -29,6 +29,11 @@
 #else
 #  include <unistd.h>
 #  include <time.h>
+#  include <limits.h>
+#  include <stdlib.h>
+#  ifdef __APPLE__
+#    include <mach-o/dyld.h>
+#  endif
 #endif
 
 /* ── ONNX Runtime ─────────────────────────────────────────────────────────── */
@@ -114,9 +119,25 @@ int64_t ionic_arr_reset(IonicArray *arr) {
     return 0;
 }
 
+/* Defined below; forward-declared so ionic_runtime_init can call it. */
+const char *ionic_exe_dir(void);
+
 void ionic_runtime_init(int argc, char **argv) {
     ionic_argc = argc;
     ionic_argv = argv;
+    /* Publish the executable's directory as $IONIC_ROOT so a self-hosted
+     * `ionic` can find its bundled `lib/` stdlib and `src/ionic_model_runtime.c`
+     * regardless of the process CWD (e.g. a `brew`-installed binary run from an
+     * arbitrary directory). `getenv("IONIC_ROOT")` then reads it back from the
+     * Ionic sources without needing a new builtin. */
+    const char *dir = ionic_exe_dir();
+#if defined(_WIN32)
+    char root_buf[PATH_MAX + 16];
+    snprintf(root_buf, sizeof(root_buf), "IONIC_ROOT=%s", dir);
+    _putenv(root_buf);
+#else
+    setenv("IONIC_ROOT", dir, 1);
+#endif
 }
 
 const char *ionic_get_arg(int64_t n) {
@@ -132,6 +153,41 @@ const char *ionic_getenv(const char *name) {
     if (!name) return "";
     const char *v = getenv(name);
     return v ? v : "";
+}
+
+/* Absolute directory of the running executable, with no trailing slash.
+ * Lets a self-hosted `ionic` locate its bundled `lib/` standard library and
+ * `src/ionic_model_runtime.c` relative to the binary itself rather than the
+ * process CWD, so an installed tarball works from any directory. Returns a
+ * pointer to a static buffer (valid until the next call); "." on failure. */
+const char *ionic_exe_dir(void) {
+    static char dir[PATH_MAX];
+#if defined(_WIN32)
+    char exe[PATH_MAX];
+    DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+    if (n == 0 || n >= sizeof(exe)) { dir[0] = '.'; dir[1] = '\0'; return dir; }
+    strncpy(dir, exe, sizeof(dir) - 1); dir[sizeof(dir) - 1] = '\0';
+#elif defined(__APPLE__)
+    char raw[PATH_MAX];
+    uint32_t size = (uint32_t)sizeof(raw);
+    if (_NSGetExecutablePath(raw, &size) != 0) { dir[0] = '.'; dir[1] = '\0'; return dir; }
+    char resolved[PATH_MAX];
+    if (realpath(raw, resolved) == NULL) {
+        strncpy(resolved, raw, sizeof(resolved) - 1); resolved[sizeof(resolved) - 1] = '\0';
+    }
+    strncpy(dir, resolved, sizeof(dir) - 1); dir[sizeof(dir) - 1] = '\0';
+#else
+    ssize_t n = readlink("/proc/self/exe", dir, sizeof(dir) - 1);
+    if (n <= 0) { dir[0] = '.'; dir[1] = '\0'; return dir; }
+    dir[n] = '\0';
+#endif
+    char *slash = strrchr(dir, '/');
+#if defined(_WIN32)
+    if (!slash) slash = strrchr(dir, '\\');
+#endif
+    if (slash) { *slash = '\0'; }
+    else       { dir[0] = '.'; dir[1] = '\0'; }
+    return dir;
 }
 
 int64_t ionic_target_is_linux(void) {
