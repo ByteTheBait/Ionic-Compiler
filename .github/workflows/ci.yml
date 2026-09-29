@@ -64,6 +64,18 @@ jobs:
           /tmp/stdlib_test | grep -q "arr_sum = 100" || (echo "arr_sum check failed"; exit 1)
           /tmp/stdlib_test | grep -q "contains: ok"  || (echo "contains check failed"; exit 1)
 
+      # ── Source-only bootstrap closed loop ────────────────────────────────
+      # With bitwise operators and relative-import splicing in the Rust
+      # frontend, `cargo build --release` alone can compile the self-hosted
+      # sources — no committed ionic_self required. The freshly built compiler
+      # must then itself work.
+      - name: Rust bootstrap compiles the self-hosted sources
+        run: |
+          ./target/release/ionic src/main.ionic -o /tmp/ionic_from_rust
+          echo 'fn main() -> int64 { print(int64_to_str(6 & 3)); return 0; }' > /tmp/bw.ionic
+          /tmp/ionic_from_rust /tmp/bw.ionic -o /tmp/bw
+          [ "$(/tmp/bw)" = "2" ] || (echo "bootstrapped compiler failed on a bitwise program"; exit 1)
+
       # ── Self-hosted bootstrap ────────────────────────────────────────────
       # Build ionic_new from the split .ionic sources using the committed
       # ionic_self binary. This is the self-hosting path used by releases.

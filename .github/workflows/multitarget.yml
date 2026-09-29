@@ -1,0 +1,120 @@
+name: Multi-target differential
+
+# Phase 1 goal: prove the Mach-O (macOS arm64) and ARM64 ELF (Linux) emitters
+# produce *identical logical output* for the same source.
+#
+# The trick that makes this possible: `cargo build --release` now yields a Rust
+# bootstrap compiler that can compile the self-hosted sources themselves
+# (`src/main.ionic`). So the Linux job needs no committed `ionic_self` — it
+# builds the whole self-hosted compiler from source and runs it through the
+# ELF emitter. The same test is run through the Mach-O emitter on macOS, and a
+# final job diffs the two transcripts against the committed golden file.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  # ── macOS arm64: self-hosted compiler → Mach-O emitter ────────────────────
+  macho:
+    name: Mach-O (macOS arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make bootstrap executable
+        run: chmod +x ionic_self
+
+      - name: Build self-hosted compiler (uses committed ionic_self)
+        run: ./build.sh
+
+      - name: Self-hosting — object files byte-identical
+        run: ./build.sh --verify-self-hosting
+
+      - name: Differential test (Mach-O)
+        run: |
+          ./ionic_new examples/multitarget_test.ionic -o /tmp/mt
+          /tmp/mt > macho.out
+          echo "--- Mach-O transcript ---"
+          cat macho.out
+          diff examples/multitarget_test.expected macho.out \
+            || (echo "Mach-O output does not match the golden file"; exit 1)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multitarget-macho
+          path: macho.out
+
+  # ── Linux arm64: bootstrap from source → ELF emitter ──────────────────────
+  elf:
+    name: ELF (Linux arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Build Rust bootstrap compiler
+        run: cargo build --release
+
+      # The Rust bootstrap can now assemble and compile the self-hosted
+      # sources — no committed ionic_self, no macOS, pure source → self-hosted.
+      - name: Bootstrap self-hosted compiler from source
+        run: ./target/release/ionic src/main.ionic -o ionic_new
+
+      - name: Smoke test the freshly bootstrapped compiler
+        run: |
+          printf 'fn main() -> int64 { print("ok"); return 0; }' > /tmp/hi.ionic
+          ./ionic_new /tmp/hi.ionic -o /tmp/hi
+          [ "$(/tmp/hi)" = "ok" ] || (echo "bootstrapped compiler produced wrong output"; exit 1)
+
+      - name: Differential test (ELF)
+        run: |
+          ./ionic_new examples/multitarget_test.ionic -o /tmp/mt
+          /tmp/mt > elf.out
+          echo "--- ELF transcript ---"
+          cat elf.out
+          diff examples/multitarget_test.expected elf.out \
+            || (echo "ELF output does not match the golden file"; exit 1)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multitarget-elf
+          path: elf.out
+
+  # ── The actual assertion: Mach-O output == ELF output ─────────────────────
+  compare:
+    name: Mach-O vs ELF identical
+    needs: [macho, elf]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Compare the two transcripts
+        run: |
+          echo "--- Mach-O ---"; cat multitarget-macho/macho.out
+          echo "--- ELF ---";    cat multitarget-elf/elf.out
+          if diff -u multitarget-macho/macho.out multitarget-elf/elf.out; then
+            echo "✓ Mach-O and ARM64 ELF produce byte-identical logical output"
+          else
+            echo "✗ Mach-O and ELF outputs DIVERGE — emitters are not equivalent"
+            exit 1
+          fi

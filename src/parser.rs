@@ -508,11 +508,41 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr, String> {
-        let mut lhs = self.parse_eq()?;
+        let mut lhs = self.parse_bitor()?;
         while *self.peek() == Token::AndAnd {
             self.advance();
-            let rhs = self.parse_eq()?;
+            let rhs = self.parse_bitor()?;
             lhs = Expr::BinOp { op: BinOp::And, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_bitor(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_bitxor()?;
+        while *self.peek() == Token::Pipe {
+            self.advance();
+            let rhs = self.parse_bitxor()?;
+            lhs = Expr::BinOp { op: BinOp::BitOr, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_bitxor(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_bitand()?;
+        while *self.peek() == Token::Caret {
+            self.advance();
+            let rhs = self.parse_bitand()?;
+            lhs = Expr::BinOp { op: BinOp::BitXor, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_bitand(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_eq()?;
+        while *self.peek() == Token::Amp {
+            self.advance();
+            let rhs = self.parse_eq()?;
+            lhs = Expr::BinOp { op: BinOp::BitAnd, lhs: Box::new(lhs), rhs: Box::new(rhs) };
         }
         Ok(lhs)
     }
@@ -533,13 +563,30 @@ impl Parser {
     }
 
     fn parse_cmp(&mut self) -> Result<Expr, String> {
-        let mut lhs = self.parse_add()?;
+        let mut lhs = self.parse_shift()?;
         loop {
             let op = match self.peek() {
                 Token::Lt   => BinOp::Lt,
                 Token::Gt   => BinOp::Gt,
                 Token::LtEq => BinOp::LtEq,
                 Token::GtEq => BinOp::GtEq,
+                _ => break,
+            };
+            self.advance();
+            let rhs = self.parse_shift()?;
+            lhs = Expr::BinOp { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+        }
+        Ok(lhs)
+    }
+
+    // Shift binds looser than additive, tighter than comparison — matching the
+    // self-hosted parser's `parse_cmp → parse_shift → parse_add` chain.
+    fn parse_shift(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_add()?;
+        loop {
+            let op = match self.peek() {
+                Token::LtLt => BinOp::Shl,
+                Token::GtGt => BinOp::Shr,
                 _ => break,
             };
             self.advance();
@@ -589,6 +636,10 @@ impl Parser {
             Token::Bang => {
                 self.advance();
                 Ok(Expr::UnOp { op: UnOp::Not, expr: Box::new(self.parse_unary()?) })
+            }
+            Token::Tilde => {
+                self.advance();
+                Ok(Expr::UnOp { op: UnOp::BitNot, expr: Box::new(self.parse_unary()?) })
             }
             _ => self.parse_postfix(),
         }

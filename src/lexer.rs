@@ -54,6 +54,13 @@ pub enum Token {
     AndAnd,
     OrOr,
     Bang,
+    // Bitwise operators
+    Amp,     // &
+    Pipe,    // |
+    Caret,   // ^
+    Tilde,   // ~
+    LtLt,    // <<
+    GtGt,    // >>
     // Assignment
     Eq,
     // Punctuation
@@ -122,6 +129,12 @@ impl fmt::Display for Token {
             Token::AndAnd => write!(f, "&&"),
             Token::OrOr => write!(f, "||"),
             Token::Bang => write!(f, "!"),
+            Token::Amp => write!(f, "&"),
+            Token::Pipe => write!(f, "|"),
+            Token::Caret => write!(f, "^"),
+            Token::Tilde => write!(f, "~"),
+            Token::LtLt => write!(f, "<<"),
+            Token::GtGt => write!(f, ">>"),
             Token::Eq => write!(f, "="),
             Token::Arrow => write!(f, "->"),
             Token::Dot => write!(f, "."),
@@ -377,6 +390,9 @@ impl Lexer {
                 if self.peek() == Some('=') {
                     self.advance();
                     Token::LtEq
+                } else if self.peek() == Some('<') {
+                    self.advance();
+                    Token::LtLt
                 } else {
                     Token::Lt
                 }
@@ -385,6 +401,9 @@ impl Lexer {
                 if self.peek() == Some('=') {
                     self.advance();
                     Token::GtEq
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    Token::GtGt
                 } else {
                     Token::Gt
                 }
@@ -394,7 +413,7 @@ impl Lexer {
                     self.advance();
                     Token::AndAnd
                 } else {
-                    return Err(format!("Unexpected '&' at line {line}, col {col}"));
+                    Token::Amp
                 }
             }
             '|' => {
@@ -402,9 +421,11 @@ impl Lexer {
                     self.advance();
                     Token::OrOr
                 } else {
-                    return Err(format!("Unexpected '|' at line {line}, col {col}"));
+                    Token::Pipe
                 }
             }
+            '^' => Token::Caret,
+            '~' => Token::Tilde,
             c => return Err(format!("Unexpected character '{}' at line {}, col {}", c, line, col)),
         };
 
@@ -425,6 +446,26 @@ impl Lexer {
     }
 
     fn read_number(&mut self, line: usize, col: usize) -> Result<SpannedToken, String> {
+        // Hex literal: 0x... / 0X...
+        if self.peek() == Some('0') {
+            if matches!(self.peek2(), Some('x') | Some('X')) {
+                self.advance(); // consume '0'
+                self.advance(); // consume 'x'
+                let mut hex = String::new();
+                while let Some(c) = self.peek() {
+                    if c.is_ascii_hexdigit() {
+                        hex.push(c);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let n = i64::from_str_radix(&hex, 16)
+                    .map_err(|e| format!("Invalid hex '0x{}': {}", hex, e))?;
+                return Ok(self.spanned(Token::IntLit(n), line, col));
+            }
+        }
+
         let mut s = String::new();
         let mut is_float = false;
         while let Some(c) = self.peek() {

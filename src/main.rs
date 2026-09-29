@@ -2,6 +2,7 @@ mod lexer;
 mod ast;
 mod parser;
 mod imports;
+mod resolve;
 mod semantic;
 mod codegen;
 
@@ -14,8 +15,19 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let (source_path, flags) = parse_args(&args);
 
-    let source = fs::read_to_string(&source_path)
+    let mut source = fs::read_to_string(&source_path)
         .unwrap_or_else(|e| die(&format!("Cannot read '{}': {}", source_path, e)));
+
+    // ── Relative-import splicing ──────────────────────────────────────────────
+    // A source built from a tree of modules (`import "path.ionic";`) is
+    // assembled depth-first into one buffer before lexing — the same way the
+    // self-hosted compiler's `imp_expand` preprocesses its own sources. Plain
+    // single-file programs are passed through untouched so their line numbers
+    // stay intact for diagnostics.
+    if resolve::has_relative_import(&source) {
+        source = resolve::expand_entry(&source_path)
+            .unwrap_or_else(|e| die(&format!("[Import Error] {}", e)));
+    }
 
     // ── Lex ──────────────────────────────────────────────────────────────────
     let mut lexer = lexer::Lexer::new(&source);

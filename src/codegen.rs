@@ -229,12 +229,40 @@ impl Codegen {
         self.emit("declare i64  @ionic_file_write_binary(ptr, ptr)");
         self.emit("declare i64  @ionic_arr_reset(ptr)");
         self.emit("declare i64  @str_to_float64_bits(ptr)");  // float literal parser helper
+        // IEEE-754 bit-pattern float helpers (used by the self-hosted optimizer
+        // for compile-time float folding); defined unprefixed in the runtime C.
+        self.emit("declare i64  @fadd_bits(i64, i64)");
+        self.emit("declare i64  @fsub_bits(i64, i64)");
+        self.emit("declare i64  @fmul_bits(i64, i64)");
+        self.emit("declare i64  @fdiv_bits(i64, i64)");
+        self.emit("declare i64  @sqrt_bits(i64)");
+        self.emit("declare i64  @fabs_bits(i64)");
+        self.emit("declare i64  @floor_bits(i64)");
+        self.emit("declare i64  @ceil_bits(i64)");
+        self.emit("declare i64  @pow_bits(i64, i64)");
+        self.emit("declare i64  @int_to_fbits(i64)");
         // System runtime
         self.emit("declare void @ionic_runtime_init(i32, ptr)");
         self.emit("declare ptr  @ionic_get_arg(i64)");
         self.emit("declare i64  @ionic_cpu_core_count()");
         self.emit("declare i32  @access(ptr, i32)");  // POSIX file_exists
         self.emit("declare i64  @ionic_system(ptr)");
+        // String / system builtins used by the self-hosted compiler sources.
+        // These map plain Ionic names onto their ionic_* runtime symbols.
+        self.emit("declare ptr  @ionic_getenv(ptr)");
+        self.emit("declare ptr  @ionic_read_line()");
+        self.emit("declare ptr  @ionic_str_slice(ptr, i64, i64)");
+        self.emit("declare ptr  @ionic_str_replace(ptr, ptr, ptr)");
+        self.emit("declare i64  @ionic_str_contains(ptr, ptr)");
+        self.emit("declare i64  @ionic_str_starts_with(ptr, ptr)");
+        self.emit("declare i64  @ionic_str_ends_with(ptr, ptr)");
+        self.emit("declare ptr  @ionic_format(ptr)");
+        self.emit("declare i64  @ionic_str_to_int64(ptr)");
+        self.emit("declare i64  @ionic_str_hash(ptr)");
+        self.emit("declare i64  @ionic_target_is_linux()");
+        self.emit("declare double @ionic_pow(double, double)");
+        self.emit("declare double @ionic_floor(double)");
+        self.emit("declare double @ionic_ceil(double)");
         self.emit("");
 
         // Emit Ionic runtime helpers
@@ -414,11 +442,20 @@ impl Codegen {
         // File I/O wrappers
         self.emit("@mode_r = private constant [2 x i8] c\"r\\00\"");
         self.emit("@mode_w = private constant [2 x i8] c\"w\\00\"");
+        self.emit("@empty_str = private constant [1 x i8] c\"\\00\"");
 
-        // file_read(path) -> string (reads entire file via fseek/ftell/fread)
+        // file_read(path) -> string (reads entire file via fseek/ftell/fread).
+        // Must guard against fopen returning NULL: a missing file previously
+        // segfaulted in flockfile() via fseek(NULL). Mirror the C runtime's
+        // `if (!f) return "";` behaviour by returning a static empty string.
         self.emit("define ptr @ionic_file_read(ptr %path) {");
         self.emit("entry:");
         self.emit("  %fp = call ptr @fopen(ptr %path, ptr @mode_r)");
+        self.emit("  %missing = icmp eq ptr %fp, null");
+        self.emit("  br i1 %missing, label %no_file, label %read_file");
+        self.emit("no_file:");
+        self.emit("  ret ptr @empty_str");
+        self.emit("read_file:");
         self.emit("  call i32 @fseek(ptr %fp, i64 0, i32 2)");   // SEEK_END=2
         self.emit("  %fsz = call i64 @ftell(ptr %fp)");
         self.emit("  call i32 @fseek(ptr %fp, i64 0, i32 0)");   // SEEK_SET=0
@@ -1256,6 +1293,80 @@ impl Codegen {
                 let (cmd, _) = &args[0];
                 let r = self.fresh_reg();
                 self.emit(&format!("  {} = call i64 @ionic_system(ptr {})", r, cmd));
+                (r, Type::Int64)
+            }
+            // String / system builtins whose Ionic name maps to an `ionic_*`
+            // runtime symbol. Needed to compile the self-hosted sources, which
+            // use str_slice, getenv and target_is_linux internally.
+            "str_slice" => {
+                let (s, _) = &args[0];
+                let (a, _) = &args[1];
+                let (b, _) = &args[2];
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call ptr @ionic_str_slice(ptr {}, i64 {}, i64 {})", r, s, a, b));
+                (r, Type::Str)
+            }
+            "str_replace" => {
+                let (s, _)     = &args[0];
+                let (from, _)  = &args[1];
+                let (to, _)    = &args[2];
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call ptr @ionic_str_replace(ptr {}, ptr {}, ptr {})", r, s, from, to));
+                (r, Type::Str)
+            }
+            "str_contains" => {
+                let (s, _) = &args[0];
+                let (sub, _) = &args[1];
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call i64 @ionic_str_contains(ptr {}, ptr {})", r, s, sub));
+                (r, Type::Int64)
+            }
+            "str_starts_with" => {
+                let (s, _) = &args[0];
+                let (p, _) = &args[1];
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call i64 @ionic_str_starts_with(ptr {}, ptr {})", r, s, p));
+                (r, Type::Int64)
+            }
+            "str_ends_with" => {
+                let (s, _) = &args[0];
+                let (p, _) = &args[1];
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call i64 @ionic_str_ends_with(ptr {}, ptr {})", r, s, p));
+                (r, Type::Int64)
+            }
+            "getenv" => {
+                let (name, _) = &args[0];
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call ptr @ionic_getenv(ptr {})", r, name));
+                (r, Type::Str)
+            }
+            "read_line" => {
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call ptr @ionic_read_line()", r));
+                (r, Type::Str)
+            }
+            "str_to_int64" => {
+                // Only rewrite to the runtime symbol when the program does not
+                // define its own `str_to_int64` (the compiler sources do).
+                if self.fns.contains_key("str_to_int64") {
+                    let ret_ty = self.fns.get("str_to_int64").map(|(_, r)| r.clone()).unwrap();
+                    let llret = Self::llvm_ty(&ret_ty).to_string();
+                    let args_ir: Vec<String> = args.iter()
+                        .map(|(v, t)| format!("{} {}", Self::llvm_ty(t), v)).collect();
+                    let r = self.fresh_reg();
+                    self.emit(&format!("  {} = call {} @str_to_int64({})", r, llret, args_ir.join(", ")));
+                    (r, ret_ty)
+                } else {
+                    let (s, _) = &args[0];
+                    let r = self.fresh_reg();
+                    self.emit(&format!("  {} = call i64 @ionic_str_to_int64(ptr {})", r, s));
+                    (r, Type::Int64)
+                }
+            }
+            "target_is_linux" => {
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} = call i64 @ionic_target_is_linux()", r));
                 (r, Type::Int64)
             }
             other => {
