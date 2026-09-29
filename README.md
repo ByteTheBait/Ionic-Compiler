@@ -1,7 +1,7 @@
 # Ionic
 
 A statically-typed, self-hosting compiled language targeting native ARM64 (macOS). Ionic compiles directly to Mach-O object files — no LLVM required at runtime — and enforces hardware placement at the type level: `tensor@cpu` and `tensor@gpu` are distinct types and the compiler rejects code that crosses the boundary without an explicit transfer.
-
+[~](assets/ionic_demo.gif)
 ```ionic
 fn fibonacci(int64 n) -> int64 {
     if (n <= 1) { return n; }
