@@ -133,3 +133,18 @@ jobs:
           fi
           ./ionic_new examples/hw_tag_error.ionic -o /tmp/hw_tag_err 2>&1 \
             | grep -q "CPU-only I/O" || (echo "missing GPU-context diagnostic"; exit 1)
+
+      # ── Tree-sitter grammar ──────────────────────────────────────────────
+      # The grammar/queries are derived from the language; make sure they still
+      # parse the whole tree (catches drift after syntax changes).
+      - name: Tree-sitter grammar parses the sources
+        run: |
+          npm install -g tree-sitter-cli
+          cd tree-sitter-ionic
+          tree-sitter generate
+          for f in ../examples/*.ionic ../lib/std/*.ionic ../src/main.ionic; do
+            if tree-sitter parse "$f" | grep -qE 'ERROR|MISSING'; then
+              echo "parse error in $f"; exit 1
+            fi
+          done
+          tree-sitter query queries/highlights.scm ../examples/hw_tags.ionic >/dev/null

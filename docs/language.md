@@ -1,6 +1,6 @@
 # Ionic Language Reference
 
-Ionic is a statically-typed, curly-brace language for data science and AI workloads. It compiles to native binaries via LLVM and supports explicit hardware placement (`@cpu` / `@gpu`).
+Ionic is a statically-typed, curly-brace language for data science and AI workloads. It compiles to native ARM64 machine code (direct Mach-O emission; an LLVM path exists as a legacy/debug backend) and supports explicit hardware placement (`@cpu` / `@gpu`).
 
 ---
 
@@ -169,7 +169,7 @@ fn abs(float64 x) -> float64 {
 }
 ```
 
-`///` lines immediately before a `fn` or `struct` definition are attached to it as documentation. They appear in `--dump-ast` output and in generated docs.
+`///` lines immediately before a `fn` or `struct` definition are attached to that definition as its documentation, so they travel with it in tooling that reads the AST.
 
 ---
 
@@ -232,11 +232,15 @@ fn abs(float64 x) -> float64 {
 ## CLI flags
 
 ```
-ionic <file.ionic> [flags] -o <output>
+ionic <file.ionic> [more.ionic ...] -o <output>
 
-  -o <name>       Output binary name (default: stem of source file)
-  --emit-ir       Print LLVM IR to stdout, do not link
-  --dump-ast      Print parsed AST to stderr
-  --dump-tokens   Print token stream to stderr
-  --run           Compile and immediately execute
+  -o <name>       Output binary name (default: a.out)
 ```
+
+`ionic_new` compiles the source file(s) to a native binary: it emits a Mach-O
+object as `<output>.o` (next to the executable) and then links it with the
+runtime. Passing several source files concatenates them in order, but the usual
+mechanism for multi-file programs is `import` rather than listing files.
+
+The self-hosted compiler has one extra debug flag, `--llvm`, which writes LLVM
+IR to `<output>.ll` instead of the native object (legacy path; not linked).

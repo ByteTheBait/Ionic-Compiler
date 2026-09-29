@@ -40,9 +40,9 @@ OUT="${OUT:-ionic_new}"
 SOURCES="src/main.ionic"
 
 # ── Mode: build then verify self-hosting ────────────────────────────────────
-# The compiler emits its object to a fixed path (/tmp/_ionic_native.o), then
-# shells out to `clang` to link it. Comparing the *linked binaries* can never
-# match: the linker stamps each output with a fresh LC_UUID and an ad-hoc
+# The compiler writes its object next to the output as "<out>.o", then shells
+# out to `clang` to link it. Comparing the *linked binaries* can never match:
+# the linker stamps each output with a fresh LC_UUID and an ad-hoc
 # LC_CODE_SIGNATURE, so byte-identity is impossible even for identical input.
 # We therefore compare the compiler-generated .o files, which ARE deterministic
 # and are exactly what this project owns.
@@ -53,10 +53,11 @@ SOURCES="src/main.ionic"
 if [ "$1" = "--verify-self-hosting" ]; then
     echo "==> Building $OUT from split source using $IONIC..."
     $IONIC $SOURCES -o "$OUT"
-    cp /tmp/_ionic_native.o /tmp/_ionic_verify_a
+    cp "$OUT.o" /tmp/_ionic_verify_a
     echo "==> Verifying self-hosting: $OUT emits an identical object file..."
-    ./"$OUT" $SOURCES -o /tmp/_ionic_verify_b.bin
-    cp /tmp/_ionic_native.o /tmp/_ionic_verify_b
+    OUT2="/tmp/_ionic_verify_b.bin"
+    ./"$OUT" $SOURCES -o "$OUT2"
+    cp "$OUT2.o" /tmp/_ionic_verify_b
     if cmp -s /tmp/_ionic_verify_a /tmp/_ionic_verify_b; then
         echo "    ✓ object files byte-identical ($(wc -c < /tmp/_ionic_verify_a | tr -d ' ') bytes)"
     else

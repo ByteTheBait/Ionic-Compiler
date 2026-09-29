@@ -68,7 +68,14 @@ if (sc_error_count != 0) {
 
 opt_program(fns_list, top_list);
 
-let obj_path = "/tmp/_ionic_native.o";
+// Object file path is derived from the OUTPUT name, not a fixed /tmp path.
+// A fixed path is not concurrency-safe: two `ionic` invocations at once would
+// write the same object and each process would link a mixture of the two, so
+// the emitted binary silently gets the wrong code. Keys on -o are unique per
+// intended output, so parallel builds stay isolated. Placed next to the output
+// (and kept as `<out>.o` in the cwd when -o has no directory), which also makes
+// the --verify-self-hosting recipe predictable.
+mut obj_path = str_concat(out_name, ".o");
 g_target_linux = target_is_linux();
 codegen_program(structs_list, fns_list, top_list, obj_path);
 mut link_cmd = "";

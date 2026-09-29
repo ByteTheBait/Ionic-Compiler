@@ -117,16 +117,19 @@ sources and compares the two **object files** (not the linked binaries).
 ```
 
 If you prefer to do it by hand, compare the compiler's emitted object
-output rather than the executable:
+output rather than the executable. Each compile writes its object next to
+the output as `<out>.o`:
 
 ```sh
-./build.sh                               # ionic_self → ./ionic_new
-./ionic_self src/main.ionic -o /tmp/a    # bootstrap's object
-cp /tmp/_ionic_native.o /tmp/a.o
-./ionic_new  src/main.ionic -o /tmp/b    # self-hosted object
-cp /tmp/_ionic_native.o /tmp/b.o
+./build.sh                          # ionic_self → ./ionic_new
+./ionic_self src/main.ionic -o /tmp/a   # also writes /tmp/a.o
+./ionic_new  src/main.ionic -o /tmp/b   # also writes /tmp/b.o
 cmp -s /tmp/a.o /tmp/b.o && echo "reproducible" || echo "DIFFERS"
 ```
+
+Because the object is keyed on the output name, the compiler is safe to
+run concurrently — two `ionic` processes building different outputs use
+different objects and cannot cross-link each other's code.
 
 The build step on its own is enough to produce a working `./ionic_new`
 tarball; releases ship that binary, and end users use it to compile their

@@ -25,6 +25,9 @@
 # LLVM IR dumps
 *.ll
 
+# Native codegen object files (<out>.o) emitted next to the output binary
+*.o
+
 # macOS
 .DS_Store
 
