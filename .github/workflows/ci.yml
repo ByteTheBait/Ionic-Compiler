@@ -135,15 +135,18 @@ jobs:
             | grep -q "CPU-only I/O" || (echo "missing GPU-context diagnostic"; exit 1)
 
       # ── Tree-sitter grammar ──────────────────────────────────────────────
-      # The grammar/queries are derived from the language; make sure they still
-      # parse the whole tree (catches drift after syntax changes).
+      # The grammar/queries are derived from the language; make sure the
+      # committed parser is in sync with grammar.js and that everything still
+      # parses (catches drift after syntax changes).
       - name: Tree-sitter grammar parses the sources
         run: |
           npm install -g tree-sitter-cli
           cd tree-sitter-ionic
           tree-sitter generate
-          for f in ../examples/*.ionic ../lib/std/*.ionic ../src/main.ionic; do
-            if tree-sitter parse "$f" | grep -qE 'ERROR|MISSING'; then
+          git diff --exit-code -- src \
+            || (echo "src/ is stale — run 'tree-sitter generate' and commit"; exit 1)
+          for f in ../examples/*.ionic ../lib/std/*.ionic ../src/*.ionic ../src/*/*.ionic; do
+            if tree-sitter parse "$f" 2>/dev/null | grep -qE 'ERROR|MISSING'; then
               echo "parse error in $f"; exit 1
             fi
           done

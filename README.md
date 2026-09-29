@@ -476,6 +476,7 @@ src/
 build.sh           Build script (--verify-self-hosting for regression check)
 ionic_new          Primary compiler binary (self-hosted)
 ionic_self         Previous-generation compiler (used to build ionic_new)
+tree-sitter-ionic/ Tree-sitter grammar + highlight queries for editors
 ```
 
 ---

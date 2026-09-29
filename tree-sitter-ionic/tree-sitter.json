@@ -1,0 +1,33 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "ionic",
+      "camelcase": "Ionic",
+      "title": "Ionic",
+      "scope": "source.ionic",
+      "path": ".",
+      "file-types": [
+        "ionic"
+      ],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^ionic$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Ionic grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/ByteTheBait/Ionic-Compiler"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "go": false,
+    "swift": false
+  }
+}
