@@ -201,8 +201,20 @@ fn lex_global(string src) -> int64 {
                                 let esc = lx_advance(lx);
                                 if (esc == CH_n_LO)      { s = str_concat(s, "\n"); }
                                 if (esc == CH_t_LO)      { s = str_concat(s, "\t"); }
+                                // NB: char_to_str(13), not a "\r" literal — the bootstrap lexer
+                                // (ionic_self) predates \r support and would mis-lex the literal.
+                                if (esc == CH_r_LO)      { s = str_concat(s, char_to_str(13)); }
+                                // \e — ESC (0x1B). Handy for ANSI/TUI escape sequences.
+                                if (esc == CH_e_LO)      { s = str_concat(s, char_to_str(27)); }
                                 if (esc == CH_QUOTE)     { s = str_concat(s, "\""); }
                                 if (esc == CH_BACKSLASH) { s = str_concat(s, "\\"); }
+                                // \xHH — a raw byte from two hex digits.
+                                if (esc == CH_x_LO || esc == CH_X_UP) {
+                                    mut xv = 0;
+                                    if (is_hex_digit(lx_peek(lx))) { xv = hex_digit_val(lx_advance(lx)) * 16; }
+                                    if (is_hex_digit(lx_peek(lx))) { xv = xv + hex_digit_val(lx_advance(lx)); }
+                                    s = str_concat(s, char_to_str(xv));
+                                }
                             } else {
                                 s = str_concat(s, char_to_str(sc));
                             }

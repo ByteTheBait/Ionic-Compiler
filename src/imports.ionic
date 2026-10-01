@@ -247,6 +247,7 @@ fn imp_norm(string path) -> string {
     mut abs = 0;
     if (n > 0 && str_index(path, 0) == CH_SLASH) { abs = 1; }
     mut out = "";       // accumulated canonical segments (no leading slash)
+    mut up  = 0;        // leading ".." that could not be collapsed
     mut i = 0;
     while (i < n) {
         // read one segment [i, j)
@@ -257,16 +258,22 @@ fn imp_norm(string path) -> string {
         if (str_eq(seg, "") || str_eq(seg, ".")) {
             // skip empty + "."
         } else if (str_eq(seg, "..")) {
-            out = imp_drop_last_seg(out);
+            if (str_eq(out, "")) { up = up + 1; }     // nothing to pop yet
+            else { out = imp_drop_last_seg(out); }
         } else {
             if (str_eq(out, "")) { out = seg; }
             else { out = str_concat(out, str_concat("/", seg)); }
         }
         i = j + 1;
     }
-    if (abs == 1) { return str_concat("/", out); }
-    if (str_eq(out, "")) { return "."; }
-    return out;
+    // Re-attach any leading ".." that could not be collapsed.
+    mut prefix = "";
+    mut u = 0;
+    while (u < up) { prefix = str_concat(prefix, "../"); u = u + 1; }
+    if (abs == 1) { return str_concat("/", str_concat(prefix, out)); }
+    let res = str_concat(prefix, out);
+    if (str_eq(res, "")) { return "."; }
+    return res;
 }
 
 // Remove the final "seg" or "a/seg" component from a segment list.

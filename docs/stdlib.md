@@ -177,6 +177,20 @@ Prints a horizontal rule of `width` dashes to stdout.
 
 ---
 
+## Terminal TUI framework (`lepton`)
+
+The alternate-screen TUI framework is no longer part of the stdlib. It lives in
+the sibling **`lepton`** project and is consumed by path import:
+
+```ionic
+import "../lepton/src/screen.ionic";
+```
+
+The `term_*` runtime builtins it depends on (raw mode, alternate screen, key
+decoding) remain part of the compiler's C runtime.
+
+---
+
 ## Selective compilation — how it works
 
 When you write:

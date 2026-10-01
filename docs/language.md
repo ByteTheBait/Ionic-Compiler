@@ -189,7 +189,20 @@ fn abs(float64 x) -> float64 {
 | `str_index(string s, int64 i) -> int64` | ASCII code of character at index i |
 | `int64_to_str(int64 n) -> string` | Format integer as string |
 | `float64_to_str(float64 x) -> string` | Format float as string |
-| `char_to_str(int64 code) -> string` | Single-character string from ASCII code |
+| `char_to_str(int64 code) -> string` | One-character string from a Unicode codepoint (UTF-8 encoded) |
+
+String literals support the escapes `\n`, `\t`, `\r`, `\"`, `\\`, `\e` (ESC,
+0x1B), and `\xHH` (a raw byte from two hex digits):
+
+```ionic
+print("\e[31mred\e[0m");    // ANSI color
+print("\x41\x42");           // "AB"
+```
+
+`char_to_str` takes a Unicode codepoint and returns its UTF-8 encoding, so
+non-ASCII glyphs work: `char_to_str(0x2500)` is a horizontal bar, and
+`char_to_str(0x250C)` is a top-left corner. The `lepton` project (a sibling of this repo) builds a
+terminal UI framework on these.
 
 ### Conversion
 | Function | Description |

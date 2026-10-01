@@ -1356,6 +1356,14 @@ fn ncg_call(int64 node) -> int64 {
     if (str_eq(callee, "http_status"))       { real_callee = "ionic_http_status"; }
     if (str_eq(callee, "http_body"))         { real_callee = "ionic_http_body"; }
     if (str_eq(callee, "http_urlencode"))    { real_callee = "ionic_http_urlencode"; }
+    // Terminal / alternate-screen TUI primitives
+    if (str_eq(callee, "term_enter"))        { real_callee = "ionic_term_enter"; }
+    if (str_eq(callee, "term_exit"))         { real_callee = "ionic_term_exit"; }
+    if (str_eq(callee, "term_write"))        { real_callee = "ionic_term_write"; }
+    if (str_eq(callee, "term_flush"))        { real_callee = "ionic_term_flush"; }
+    if (str_eq(callee, "term_size"))         { real_callee = "ionic_term_size"; }
+    if (str_eq(callee, "term_poll"))         { real_callee = "ionic_term_poll"; }
+    if (str_eq(callee, "term_key"))          { real_callee = "ionic_term_key"; }
     if (str_eq(callee, "min"))               { real_callee = "ionic_min"; }
     if (str_eq(callee, "max"))               { real_callee = "ionic_max"; }
     if (str_eq(callee, "abs"))               { real_callee = "ionic_abs"; }

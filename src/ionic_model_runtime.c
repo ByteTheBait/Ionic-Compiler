@@ -448,8 +448,12 @@ char *ionic_format(const char *fmt,
 
 __attribute__((weak))
 char *ionic_char_to_str(int64_t c) {
+    /* One raw byte from a code point 0..255. The lexer rebuilds string
+     * literals byte-by-byte through this, so it must be byte-identity for
+     * 0..255 (no UTF-8 encoding, no 7-bit masking) or non-ASCII source bytes
+     * would be corrupted. UTF-8 encoding lives in Ionic (u_utf8 / tui_utf8). */
     char *buf = (char *)malloc(2);
-    buf[0] = (char)(c & 0x7F); buf[1] = '\0';
+    buf[0] = (char)(c & 0xFF); buf[1] = '\0';
     return buf;
 }
 
@@ -1142,3 +1146,270 @@ char *ionic_http_urlencode(const char *s) {
     *p = '\0';
     return out;
 }
+
+/* ═══ Terminal / alternate-screen TUI runtime ═══════════════════════════════
+ * Raw-mode terminal control for building full-screen TUIs.
+ *
+ *   ionic_term_enter()  — save termios, switch to raw mode, enter the alternate
+ *                         screen (?1049h), hide the cursor, clear. Installs an
+ *                         atexit handler so the terminal is always restored.
+ *   ionic_term_exit()   — leave the alternate screen, show cursor, restore raw.
+ *   ionic_term_write(s) — write a raw string to the TTY (no stdio buffering).
+ *   ionic_term_flush()  — no-op; present so TUI code can be explicit about it.
+ *   ionic_term_size()   — cols*1000 + rows (falls back to 80x24).
+ *   ionic_term_poll(ms) — 1 if input readable within ms, 0 on timeout, -1 error.
+ *   ionic_term_key()    — block for one keypress; codepoint, or a KEY_* sentinel
+ *                         (>=1000) for arrows/Home/End/etc; -1 on EOF/error.
+ *
+ * Input is read from /dev/tty (falling back to stdin) and output written to
+ * /dev/tty (falling back to stdout), so redirecting stdin/stdout does not
+ * corrupt a TUI session.
+ *
+ * Design notes:
+ *   - The read fd is put in O_NONBLOCK so no read can ever block, and reads are
+ *     issued only after poll() reports readable. This is required because a raw
+ *     fd can report POLLIN (e.g. after an ESC) yet still block a VMIN=1 read.
+ *   - The read-side flags and termios are snapshot once and both fully restored
+ *     on exit/atexit, so the host shell is left exactly as it was.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifndef _WIN32
+#  include <termios.h>
+#  include <fcntl.h>
+#  include <sys/select.h>
+#  include <errno.h>
+#  include <signal.h>
+#  include <sys/ioctl.h>
+
+/* KEY_* sentinels (must match lib/tui/term.ionic). */
+#define IONIC_KEY_UP    1000
+#define IONIC_KEY_DOWN  1001
+#define IONIC_KEY_RIGHT 1002
+#define IONIC_KEY_LEFT  1003
+#define IONIC_KEY_HOME  1004
+#define IONIC_KEY_END   1005
+#define IONIC_KEY_PGUP  1006
+#define IONIC_KEY_PGDN  1007
+#define IONIC_KEY_INS   1008
+#define IONIC_KEY_DEL   1009
+#define IONIC_KEY_ESC   27
+
+static int  g_tui_in_fd        = -1;  /* read side  */
+static int  g_tui_out_fd       = -1;  /* write side */
+static int  g_tui_raw          = 0;   /* raw mode active */
+static int  g_tui_have_saved   = 0;   /* g_tui_saved holds original termios */
+static int  g_tui_saved_flags  = 0;   /* original fcntl(O_*) flags of in_fd */
+static int  g_tui_have_flags   = 0;
+static int  g_tui_hooked       = 0;   /* atexit installed */
+static int  g_tui_alt          = 0;   /* alternate screen active */
+static struct termios g_tui_saved;
+
+static int tui_dbg(void) { static int d = -1; if (d < 0) d = getenv("IONIC_TUI_DEBUG") ? 1 : 0; return d; }
+#define TUIDBG(...) do { if (tui_dbg()) fprintf(stderr, __VA_ARGS__); } while (0)
+
+/* Open the TTY fds once; fall back to stdin/stdout when /dev/tty is absent. */
+static void tui_open(void) {
+    if (g_tui_in_fd < 0) {
+        g_tui_in_fd = open("/dev/tty", O_RDONLY | O_NONBLOCK);
+        TUIDBG("tui_open in fd=%d errno=%d\n", g_tui_in_fd, errno);
+        if (g_tui_in_fd < 0) g_tui_in_fd = 0;
+    }
+    if (g_tui_out_fd < 0) {
+        g_tui_out_fd = open("/dev/tty", O_WRONLY);
+        TUIDBG("tui_open out fd=%d errno=%d\n", g_tui_out_fd, errno);
+        if (g_tui_out_fd < 0) g_tui_out_fd = 1;
+    }
+}
+
+/* Poll g_tui_in_fd for readability, up to timeout_ms. 1 ready, 0 timeout. */
+/* NB: select(), not poll(). On macOS poll() reports POLLNVAL on a
+ * non-blocking tty fd even when it is perfectly valid and readable. */
+static int tui_wait(int timeout_ms) {
+    fd_set rf; FD_ZERO(&rf); FD_SET(g_tui_in_fd, &rf);
+    struct timeval tv, *ptv = NULL;
+    if (timeout_ms >= 0) {
+        tv.tv_sec  = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        ptv = &tv;
+    }
+    int r = select(g_tui_in_fd + 1, &rf, NULL, NULL, ptv);
+    int ready = (r > 0 && FD_ISSET(g_tui_in_fd, &rf)) ? 1 : 0;
+    TUIDBG("tui_wait fd=%d to=%d r=%d ready=%d\n", g_tui_in_fd, timeout_ms, r, ready);
+    return ready;
+}
+
+/* Non-blocking single-byte read; -1 when nothing is ready or on EOF/error. */
+static int tui_try_byte(void) {
+    unsigned char b;
+    ssize_t n = read(g_tui_in_fd, &b, 1);
+    if (n == 1) return (int)b;
+    return -1;
+}
+
+/* Block until a byte is available (or timeout_ms < 0 for forever), then read it. */
+static int tui_getbyte(int timeout_ms) {
+    if (!tui_wait(timeout_ms)) return -1;
+    return tui_try_byte();
+}
+
+/* Restore the terminal no matter how the program exits. */
+static void tui_restore_at_exit(void) {
+    if (g_tui_alt) {
+        const char *leave = "\033[?25h\033[?1049l";
+        if (g_tui_out_fd >= 0) { ssize_t ig = write(g_tui_out_fd, leave, strlen(leave)); (void)ig; }
+        g_tui_alt = 0;
+    }
+    if (g_tui_raw && g_tui_have_saved && g_tui_in_fd >= 0) {
+        tcsetattr(g_tui_in_fd, TCSANOW, &g_tui_saved);
+        g_tui_raw = 0;
+    }
+    if (g_tui_have_flags && g_tui_in_fd >= 0) {
+        fcntl(g_tui_in_fd, F_SETFL, g_tui_saved_flags);
+    }
+}
+
+int64_t ionic_term_write(const char *s) {
+    tui_open();
+    if (!s) return 0;
+    size_t len = strlen(s);
+    if (g_tui_out_fd < 0) { fputs(s, stdout); fflush(stdout); return (int64_t)len; }
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = write(g_tui_out_fd, s + off, len - off);
+        if (w < 0) { if (errno == EINTR) continue; break; }
+        off += (size_t)w;
+    }
+    return (int64_t)off;
+}
+
+int64_t ionic_term_enter(void) {
+    tui_open();
+    if (!g_tui_have_saved && g_tui_in_fd >= 0) {
+        if (tcgetattr(g_tui_in_fd, &g_tui_saved) == 0) g_tui_have_saved = 1;
+    }
+    if (!g_tui_have_flags && g_tui_in_fd >= 0) {
+        int fl = fcntl(g_tui_in_fd, F_GETFL, 0);
+        if (fl >= 0) { g_tui_saved_flags = fl; g_tui_have_flags = 1; }
+    }
+    if (g_tui_have_saved) {
+        struct termios raw = g_tui_saved;
+        raw.c_lflag &= ~(tcflag_t)(ECHO | ICANON | ISIG | IEXTEN);
+        raw.c_iflag &= ~(tcflag_t)(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
+        raw.c_oflag &= ~(tcflag_t)(OPOST);
+        raw.c_cflag |=  (tcflag_t)(CS8);
+        raw.c_cc[VMIN]  = 1;
+        raw.c_cc[VTIME] = 0;
+        if (tcsetattr(g_tui_in_fd, TCSANOW, &raw) == 0) g_tui_raw = 1;
+    }
+    if (g_tui_in_fd >= 0) {
+        int fl = fcntl(g_tui_in_fd, F_GETFL, 0);
+        if (fl >= 0) fcntl(g_tui_in_fd, F_SETFL, fl | O_NONBLOCK);
+    }
+    if (!g_tui_hooked) { atexit(tui_restore_at_exit); g_tui_hooked = 1; }
+    ionic_term_write("\033[?1049h\033[2J\033[H\033[?25l");
+    g_tui_alt = 1;
+    return 0;
+}
+
+int64_t ionic_term_exit(void) {
+    ionic_term_write("\033[?25h\033[?1049l");
+    g_tui_alt = 0;
+    if (g_tui_raw && g_tui_have_saved && g_tui_in_fd >= 0) {
+        tcsetattr(g_tui_in_fd, TCSANOW, &g_tui_saved);
+        g_tui_raw = 0;
+    }
+    if (g_tui_have_flags && g_tui_in_fd >= 0) {
+        fcntl(g_tui_in_fd, F_SETFL, g_tui_saved_flags);
+    }
+    return 0;
+}
+
+int64_t ionic_term_size(void) {
+    tui_open();
+    int fd = (g_tui_out_fd >= 0) ? g_tui_out_fd : 1;
+    struct winsize ws;
+    if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0) {
+        return (int64_t)ws.ws_col * 1000 + (int64_t)ws.ws_row;
+    }
+    return 80 * 1000 + 24;
+}
+
+int64_t ionic_term_flush(void) { return 0; }
+
+int64_t ionic_term_poll(int64_t timeout_ms) {
+    tui_open();
+    if (g_tui_in_fd < 0) return -1;
+    return tui_wait((int)timeout_ms);
+}
+
+int64_t ionic_term_key(void) {
+    tui_open();
+    if (g_tui_in_fd < 0) return -1;
+
+    TUIDBG("term_key: blocking on fd=%d\n", g_tui_in_fd);
+    int c = tui_getbyte(-1);      /* block for the first byte */
+    TUIDBG("term_key: first byte=%d\n", c);
+    if (c < 0) return -1;
+
+    if (c == 0x1b) {  /* ESC: a lone Esc or the start of an escape sequence */
+        if (!tui_wait(25)) return IONIC_KEY_ESC;
+        int c2 = tui_try_byte();
+        if (c2 < 0) return IONIC_KEY_ESC;
+        if (c2 == '[' || c2 == 'O') {
+            if (!tui_wait(25)) return IONIC_KEY_ESC;
+            int c3 = tui_try_byte();
+            if (c3 < 0) return IONIC_KEY_ESC;
+            if (c3 >= '0' && c3 <= '9') {  /* CSI with numeric param, e.g. [3~ */
+                int num = c3 - '0';
+                int fin = c3;
+                while (tui_wait(25)) {
+                    int nc = tui_try_byte();
+                    if (nc < 0) break;
+                    if (nc >= '0' && nc <= '9') { num = num * 10 + (nc - '0'); continue; }
+                    fin = nc; break;
+                }
+                if (fin == '~') {
+                    if (num == 1) return IONIC_KEY_HOME;
+                    if (num == 2) return IONIC_KEY_INS;
+                    if (num == 3) return IONIC_KEY_DEL;
+                    if (num == 4) return IONIC_KEY_END;
+                    if (num == 5) return IONIC_KEY_PGUP;
+                    if (num == 6) return IONIC_KEY_PGDN;
+                }
+                return IONIC_KEY_ESC;
+            }
+            if (c3 == 'A') return IONIC_KEY_UP;
+            if (c3 == 'B') return IONIC_KEY_DOWN;
+            if (c3 == 'C') return IONIC_KEY_RIGHT;
+            if (c3 == 'D') return IONIC_KEY_LEFT;
+            if (c3 == 'H') return IONIC_KEY_HOME;
+            if (c3 == 'F') return IONIC_KEY_END;
+            return IONIC_KEY_ESC;
+        }
+        return IONIC_KEY_ESC;
+    }
+
+    if (c < 0x80) return c;  /* ASCII */
+
+    /* UTF-8: decode a multibyte sequence into a codepoint. */
+    int extra = 0; int cp = 0;
+    if      ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra = 1; }
+    else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra = 2; }
+    else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra = 3; }
+    else return -1;
+    for (int i = 0; i < extra; i++) {
+        int nb = tui_getbyte(25);   /* continuation bytes usually arrive at once */
+        if (nb < 0) break;
+        cp = (cp << 6) | (nb & 0x3F);
+    }
+    return cp;
+}
+
+#else  /* _WIN32 — no raw-terminal support; safe stubs. */
+int64_t ionic_term_write(const char *s) { (void)s; return -1; }
+int64_t ionic_term_enter(void)  { return -1; }
+int64_t ionic_term_exit(void)   { return -1; }
+int64_t ionic_term_size(void)   { return 80 * 1000 + 24; }
+int64_t ionic_term_flush(void)  { return -1; }
+int64_t ionic_term_poll(int64_t timeout_ms) { (void)timeout_ms; return -1; }
+int64_t ionic_term_key(void)    { return -1; }
+#endif

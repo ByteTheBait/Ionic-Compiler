@@ -277,8 +277,23 @@ impl Lexer {
                     Some('\\') => match self.advance() {
                         Some('n') => s.push('\n'),
                         Some('t') => s.push('\t'),
+                        Some('r') => s.push('\r'),
+                        Some('e') => s.push('\x1b'), // ESC, for ANSI/TUI sequences
                         Some('"') => s.push('"'),
                         Some('\\') => s.push('\\'),
+                        Some('x') | Some('X') => {
+                            let mut v: u32 = 0;
+                            for _ in 0..2 {
+                                match self.peek() {
+                                    Some(h) if h.is_ascii_hexdigit() => {
+                                        v = v * 16 + h.to_digit(16).unwrap();
+                                        self.advance();
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            s.push(v as u8 as char);
+                        }
                         Some(e) => s.push(e),
                         None => return Err("Unterminated escape".to_string()),
                     },

@@ -1,0 +1,42 @@
+# =============================================================================
+# 1. SYNTAX HIGHLIGHTING ENGINE (MAPPED TO SWIFT/RUST)
+# =============================================================================
+
+# Map .ionic files to Swift for rich token coloring (fn, ->, mut, let, while)
+*.ionic linguist-language=Swift
+
+# Ensure Tree-sitter development query schemas get colored cleanly as Scheme
+queries/*.scm linguist-language=Scheme
+
+# =============================================================================
+# 2. ACCURATE STATS FOR A CUSTOM LANGUAGE (THE HACK)
+# =============================================================================
+
+# Tell GitHub to treat your .ionic files as "documentation" for metrics.
+# This keeps the beautiful Swift coloring, but entirely hides "Swift" 
+# from your repository's footer language breakdown bar. 
+*.ionic linguist-documentation=true
+
+# =============================================================================
+# 3. COLLAPSE GENERATED PARSER & ECOSYSTEM CODE
+# =============================================================================
+
+# Your Tree-sitter C/JSON artifacts will hijack repository stats and turn 
+# your project into a "C project". This flags them as generated to hide them 
+# from Pull Request diffs and exclude them from your language bar.
+src/*.json linguist-generated=true
+src/parser.c linguist-generated=true
+src/tree_sitter/* linguist-generated=true
+
+# Hide prebuilt compiler binaries and C-runtime assets from diff bloat
+ionic_self linguist-generated=true
+ionic_new linguist-generated=true
+src/ionic_model_runtime.c linguist-generated=true
+
+# =============================================================================
+# 4. REPO HEALTH & SYSTEM LINE ENDINGS
+# =============================================================================
+
+# Enforce consistent LF line endings for all text/code files across contributors
+* text=auto eol=lf
+

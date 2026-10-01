@@ -692,6 +692,14 @@ fn register_builtins() -> int64 {
     register_builtin("http_status",      1, TY_INT64,   "");
     register_builtin("http_body",        1, TY_STR,     "");
     register_builtin("http_urlencode",   1, TY_STR,     "");
+    // Terminal / alternate-screen TUI primitives
+    register_builtin("term_enter",        0, TY_INT64,   "");
+    register_builtin("term_exit",         0, TY_INT64,   "");
+    register_builtin("term_write",        1, TY_INT64,   "");
+    register_builtin("term_flush",        0, TY_INT64,   "");
+    register_builtin("term_size",         0, TY_INT64,   "");
+    register_builtin("term_poll",         1, TY_INT64,   "");
+    register_builtin("term_key",          0, TY_INT64,   "");
     // ML / model inference
     register_builtin("load_model",        1, TY_MODEL_CPU,"");
     register_builtin("model_free",        1, TY_VOID,    "");
